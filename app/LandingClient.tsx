@@ -11,8 +11,9 @@ export default function LandingClient() {
   const { isLoggedIn, t } = useApp();
   const router = useRouter();
 
+  // ✅ Fix: logged-in users should go to /editor (NOT /app)
   const handleCreateClick = () => {
-    router.push(isLoggedIn ? "/app" : "/login");
+    router.push(isLoggedIn ? "/editor" : "/login");
   };
 
   const IG_URL = "https://www.instagram.com/runner_better";
@@ -27,6 +28,16 @@ export default function LandingClient() {
           backgroundColor: "#FFFFFF",
         }}
       >
+        {/* local CSS for hover behavior (stable, app-friendly) */}
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `
+              .ig-tile-overlay { opacity: 0; transition: opacity .2s ease; }
+              .ig-tile:hover .ig-tile-overlay { opacity: 1; }
+            `,
+          }}
+        />
+
         {/* Hero Section */}
         <section
           style={{
@@ -100,9 +111,7 @@ export default function LandingClient() {
                 dangerouslySetInnerHTML={{
                   __html: `
                     @media (max-width: 768px) {
-                      .image-preview-grid {
-                        grid-template-columns: 1fr !important;
-                      }
+                      .image-preview-grid { grid-template-columns: 1fr !important; }
                     }
                   `,
                 }}
@@ -117,6 +126,7 @@ export default function LandingClient() {
                     boxShadow: "var(--shadow-lg)",
                   }}
                 >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={`/assets/landing/lifestyle-${i}.jpg`}
                     alt={`Lifestyle ${i}`}
@@ -162,28 +172,94 @@ export default function LandingClient() {
                 gap: "2.5rem",
               }}
             >
-              <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", padding: "4rem 2rem", borderRadius: "2rem" }}>
-                <div style={{ background: "#EFF6FF", padding: "1.25rem", borderRadius: "50%", marginBottom: "2rem", color: "#3B82F6" }}>
+              <div
+                className="card"
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  textAlign: "center",
+                  padding: "4rem 2rem",
+                  borderRadius: "2rem",
+                }}
+              >
+                <div
+                  style={{
+                    background: "#EFF6FF",
+                    padding: "1.25rem",
+                    borderRadius: "50%",
+                    marginBottom: "2rem",
+                    color: "#3B82F6",
+                  }}
+                >
                   <Upload size={40} />
                 </div>
-                <h3 style={{ fontSize: "1.5rem", fontWeight: "800", marginBottom: "1rem" }}>{t("step1Title")}</h3>
-                <p style={{ color: "var(--text-secondary)", lineHeight: "1.6" }}>{t("step1Desc")}</p>
+                <h3 style={{ fontSize: "1.5rem", fontWeight: "800", marginBottom: "1rem" }}>
+                  {t("step1Title")}
+                </h3>
+                <p style={{ color: "var(--text-secondary)", lineHeight: "1.6" }}>
+                  {t("step1Desc")}
+                </p>
               </div>
 
-              <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", padding: "4rem 2rem", borderRadius: "2rem" }}>
-                <div style={{ background: "#ECFDF5", padding: "1.25rem", borderRadius: "50%", marginBottom: "2rem", color: "#10B981" }}>
+              <div
+                className="card"
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  textAlign: "center",
+                  padding: "4rem 2rem",
+                  borderRadius: "2rem",
+                }}
+              >
+                <div
+                  style={{
+                    background: "#ECFDF5",
+                    padding: "1.25rem",
+                    borderRadius: "50%",
+                    marginBottom: "2rem",
+                    color: "#10B981",
+                  }}
+                >
                   <Crop size={40} />
                 </div>
-                <h3 style={{ fontSize: "1.5rem", fontWeight: "800", marginBottom: "1rem" }}>{t("step2Title")}</h3>
-                <p style={{ color: "var(--text-secondary)", lineHeight: "1.6" }}>{t("step2Desc")}</p>
+                <h3 style={{ fontSize: "1.5rem", fontWeight: "800", marginBottom: "1rem" }}>
+                  {t("step2Title")}
+                </h3>
+                <p style={{ color: "var(--text-secondary)", lineHeight: "1.6" }}>
+                  {t("step2Desc")}
+                </p>
               </div>
 
-              <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", padding: "4rem 2rem", borderRadius: "2rem" }}>
-                <div style={{ background: "#FFF7ED", padding: "1.25rem", borderRadius: "50%", marginBottom: "2rem", color: "#F97316" }}>
+              <div
+                className="card"
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  textAlign: "center",
+                  padding: "4rem 2rem",
+                  borderRadius: "2rem",
+                }}
+              >
+                <div
+                  style={{
+                    background: "#FFF7ED",
+                    padding: "1.25rem",
+                    borderRadius: "50%",
+                    marginBottom: "2rem",
+                    color: "#F97316",
+                  }}
+                >
                   <Truck size={40} />
                 </div>
-                <h3 style={{ fontSize: "1.5rem", fontWeight: "800", marginBottom: "1rem" }}>{t("step3Title")}</h3>
-                <p style={{ color: "var(--text-secondary)", lineHeight: "1.6" }}>{t("step3Desc")}</p>
+                <h3 style={{ fontSize: "1.5rem", fontWeight: "800", marginBottom: "1rem" }}>
+                  {t("step3Title")}
+                </h3>
+                <p style={{ color: "var(--text-secondary)", lineHeight: "1.6" }}>
+                  {t("step3Desc")}
+                </p>
               </div>
             </div>
 
@@ -206,10 +282,24 @@ export default function LandingClient() {
                 <Truck size={48} strokeWidth={1.5} />
               </div>
               <div>
-                <h3 style={{ fontSize: "2.5rem", fontWeight: "900", color: "var(--text-primary)", letterSpacing: "-0.03em" }}>
+                <h3
+                  style={{
+                    fontSize: "2.5rem",
+                    fontWeight: "900",
+                    color: "var(--text-primary)",
+                    letterSpacing: "-0.03em",
+                  }}
+                >
                   {t("deliveryHighlightTitle")}
                 </h3>
-                <p style={{ fontSize: "1.25rem", fontWeight: "600", color: "var(--text-tertiary)", marginTop: "0.5rem" }}>
+                <p
+                  style={{
+                    fontSize: "1.25rem",
+                    fontWeight: "600",
+                    color: "var(--text-tertiary)",
+                    marginTop: "0.5rem",
+                  }}
+                >
                   {t("deliveryHighlightSubtitle")}
                 </p>
               </div>
@@ -220,8 +310,12 @@ export default function LandingClient() {
         {/* Instagram */}
         <section style={{ padding: "6rem 1rem", backgroundColor: "#FFFFFF" }}>
           <div className="container" style={{ textAlign: "center" }}>
-            <h2 style={{ fontSize: "2rem", fontWeight: "bold", marginBottom: "0.5rem" }}>{t("realWallsTitle")}</h2>
-            <p style={{ color: "var(--text-secondary)", marginBottom: "3rem" }}>{t("realWallsDesc")}</p>
+            <h2 style={{ fontSize: "2rem", fontWeight: "bold", marginBottom: "0.5rem" }}>
+              {t("realWallsTitle")}
+            </h2>
+            <p style={{ color: "var(--text-secondary)", marginBottom: "3rem" }}>
+              {t("realWallsDesc")}
+            </p>
 
             <div
               style={{
@@ -237,7 +331,7 @@ export default function LandingClient() {
                   href={IG_URL}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="instagram-tile"
+                  className="instagram-tile ig-tile"
                   style={{
                     display: "block",
                     aspectRatio: "1/1",
@@ -249,6 +343,7 @@ export default function LandingClient() {
                   }}
                 >
                   <div
+                    className="ig-tile-overlay"
                     style={{
                       position: "absolute",
                       inset: 0,
@@ -257,11 +352,7 @@ export default function LandingClient() {
                       justifyContent: "center",
                       backgroundColor: "rgba(0,0,0,0.3)",
                       color: "white",
-                      opacity: 0,
-                      transition: "opacity 0.2s",
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
-                    onMouseLeave={(e) => (e.currentTarget.style.opacity = "0")}
                   >
                     View on Instagram
                   </div>
