@@ -58,6 +58,82 @@ const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
 type AnyOrder = any;
 type AnyPhoto = any;
 
+/* -------------------- HELPERS -------------------- */
+
+function normalizePhone(s: string) {
+  return (s || "").replace(/[^\d]/g, "");
+}
+
+function safeStr(v: any) {
+  return typeof v === "string" ? v : "";
+}
+
+// ✅ 주문의 고객/주소 정보를 “신형/구형/다른키” 모두 지원
+function getCustomer(order: AnyOrder) {
+  const userName =
+    order?.user?.name ||
+    order?.customer?.name ||
+    order?.customerName ||
+    order?.userName;
+
+  const userEmail =
+    order?.user?.email ||
+    order?.customer?.email ||
+    order?.customerEmail ||
+    order?.email;
+
+  const legacy = order?.shipping || {};
+  const addr = order?.shippingAddress || {};
+
+  const name = safeStr(userName) || safeStr(legacy?.name) || safeStr(addr?.fullName) || "";
+  const email = safeStr(userEmail) || safeStr(legacy?.email) || safeStr(addr?.email) || "";
+  const phone = safeStr(legacy?.phone) || safeStr(addr?.phone) || "";
+  const instagram = safeStr(legacy?.instagram) || safeStr(addr?.instagram) || "";
+
+  const address1 = safeStr(legacy?.address) || safeStr(addr?.address1) || "";
+  const address2 = safeStr(addr?.address2) || safeStr(legacy?.address2) || "";
+  const city = safeStr(legacy?.city) || safeStr(addr?.city) || "";
+  const state = safeStr(legacy?.state) || safeStr(addr?.state) || "";
+  const postalCode = safeStr(legacy?.postalCode) || safeStr(addr?.postalCode) || "";
+  const country = safeStr(legacy?.country) || safeStr(addr?.country) || "";
+
+  return {
+    name,
+    email,
+    phone,
+    instagram,
+    address1,
+    address2,
+    city,
+    state,
+    postalCode,
+    country,
+  };
+}
+
+function getTileCount(order: AnyOrder) {
+  if (typeof order?.qty === "number") return order.qty;
+  if (typeof order?.itemsCount === "number") return order.itemsCount;
+  if (Array.isArray(order?.items) && order.items.length) {
+    return order.items.reduce((sum: number, it: any) => sum + (Number(it?.qty) || 1), 0);
+  }
+  return 0;
+}
+
+function getPhotoUrl(photo: AnyPhoto) {
+  return photo?.previewUrl || photo?.url || photo?.src || "";
+}
+
+function downloadUrl(url: string, filename: string) {
+  if (!url) return;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename || "photo.jpg";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 export default function AdminClient() {
   // Local State
   const [orders, setOrders] = useState<AnyOrder[]>([]);
@@ -91,8 +167,6 @@ export default function AdminClient() {
     window.addEventListener("storage", refreshOrders);
     return () => window.removeEventListener("storage", refreshOrders);
   }, []);
-
-  const normalizePhone = (s: string) => (s || "").replace(/[^\d]/g, "");
 
   const filteredOrders = useMemo(() => {
     let result = [...orders];
@@ -133,9 +207,11 @@ export default function AdminClient() {
     if (q) {
       result = result.filter((order) => {
         const idValue = (order.id || "").toLowerCase();
-        const nameValue = (order.shipping?.name || "").toLowerCase();
-        const emailValue = (order.shipping?.email || "").toLowerCase();
-        const phoneValue = normalizePhone(order.shipping?.phone || "");
+        const c = getCustomer(order);
+
+        const nameValue = (c.name || "").toLowerCase();
+        const emailValue = (c.email || "").toLowerCase();
+        const phoneValue = normalizePhone(c.phone || "");
         const qPhone = normalizePhone(q);
 
         switch (searchField) {
@@ -170,17 +246,13 @@ export default function AdminClient() {
       const dateStr = new Date(order.createdAt).toISOString().split("T")[0];
       if (!groups[dateStr]) groups[dateStr] = { date: dateStr, orders: [], tileCount: 0 };
       groups[dateStr].orders.push(order);
-      const qty = order.qty ?? (Array.isArray(order.items) ? order.items.length : 0);
-      groups[dateStr].tileCount += qty;
+      groups[dateStr].tileCount += getTileCount(order);
     });
     return Object.values(groups).sort((a, b) => b.date.localeCompare(a.date));
   }, [filteredOrders]);
 
   const summary = useMemo(() => {
-    const totalTiles = filteredOrders.reduce((sum, o) => {
-      const qty = o.qty ?? (Array.isArray(o.items) ? o.items.length : 0);
-      return sum + qty;
-    }, 0);
+    const totalTiles = filteredOrders.reduce((sum, o) => sum + getTileCount(o), 0);
     return { orderCount: filteredOrders.length, tileCount: totalTiles };
   }, [filteredOrders]);
 
@@ -189,7 +261,7 @@ export default function AdminClient() {
     [orders, selectedOrderId]
   );
 
-  const shipping = selectedOrder?.shipping || {};
+  const customer = selectedOrder ? getCustomer(selectedOrder) : null;
   const items: AnyPhoto[] = Array.isArray(selectedOrder?.items) ? selectedOrder.items : [];
 
   // Ensure selectedOrderId stays valid and auto-select if needed
@@ -219,14 +291,14 @@ export default function AdminClient() {
 
   const handleStatusChange = (orderId: string, newStatus: string) => {
     if (!newStatus || newStatus === "all") return;
-    updateOrderStatus(orderId, newStatus);
+    updateOrderStatus(orderId, newStatus as any);
     refreshOrders();
   };
 
   const handleBulkStatusApply = () => {
     if (!bulkStatus || selectedIds.length === 0) return;
     if (window.confirm(`Change status of ${selectedIds.length} orders to ${bulkStatus.toUpperCase()}?`)) {
-      selectedIds.forEach((id) => updateOrderStatus(id, bulkStatus));
+      selectedIds.forEach((id) => updateOrderStatus(id, bulkStatus as any));
       refreshOrders();
       setSelectedIds([]);
       setBulkStatus("");
@@ -251,10 +323,6 @@ export default function AdminClient() {
     });
   };
 
-  const getPhotoUrl = (photo: AnyPhoto) => {
-    return photo?.url || photo?.previewUrl || "";
-  };
-
   const handlePhotoClick = (photo: AnyPhoto) => {
     if (isSelectMode) togglePhotoSelection(photo.id);
     else setLightboxPhoto(photo);
@@ -268,6 +336,45 @@ export default function AdminClient() {
       minute: "2-digit",
     });
   };
+
+  const handleDownloadAll = () => {
+    if (!items?.length) return;
+    // ✅ 순차 다운로드 (zip은 나중에 서버/라이브러리 붙일 때)
+    items.forEach((p: any, idx: number) => {
+      const url = getPhotoUrl(p);
+      if (!url) return;
+      const name = p?.filename || `tile-${idx + 1}.jpg`;
+      setTimeout(() => downloadUrl(url, name), idx * 120);
+    });
+  };
+
+  const handleDownloadSelected = () => {
+    if (!items?.length) return;
+    const list = items.filter((p: any, idx: number) => {
+      const pid = p?.id || `photo-${idx}`;
+      return selectedPhotoIds.has(pid);
+    });
+
+    list.forEach((p: any, i: number) => {
+      const url = getPhotoUrl(p);
+      if (!url) return;
+      const name = p?.filename || `tile-${i + 1}.jpg`;
+      setTimeout(() => downloadUrl(url, name), i * 120);
+    });
+  };
+
+  const fullAddress = useMemo(() => {
+    if (!customer) return "";
+    const parts = [
+      customer.address1,
+      customer.address2,
+      customer.city,
+      customer.state,
+      customer.postalCode,
+      customer.country,
+    ].filter(Boolean);
+    return parts.join(", ");
+  }, [customer]);
 
   return (
     <AppLayout showFooter={false}>
@@ -285,7 +392,10 @@ export default function AdminClient() {
             </div>
             <h2 style={{ fontSize: "1.25rem", fontWeight: "bold", color: "#111827" }}>Admin Dashboard</h2>
           </div>
-          <button style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 1rem", borderRadius: 8, border: "1px solid #E5E7EB", backgroundColor: "white", fontSize: "0.875rem", fontWeight: 600 }}>
+          <button
+            onClick={() => alert("Export is a placeholder for now.")}
+            style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 1rem", borderRadius: 8, border: "1px solid #E5E7EB", backgroundColor: "white", fontSize: "0.875rem", fontWeight: 600 }}
+          >
             <Download size={16} />
             Export
           </button>
@@ -461,6 +571,9 @@ export default function AdminClient() {
                         const statusKey = (order.status || "").toLowerCase();
                         const statusColor = STATUS_COLORS[statusKey] || { bg: "#F3F4F6", text: "#6B7280" };
 
+                        const c = getCustomer(order);
+                        const displayName = c.name?.trim() ? c.name : "Unknown User";
+
                         return (
                           <div
                             key={order.id}
@@ -487,10 +600,12 @@ export default function AdminClient() {
                                 </span>
                               </div>
 
-                              <div style={{ fontWeight: 500, color: "#374151", marginBottom: "0.25rem", fontSize: "0.875rem" }}>{order.shipping?.name || "Unknown User"}</div>
+                              <div style={{ fontWeight: 500, color: "#374151", marginBottom: "0.25rem", fontSize: "0.875rem" }}>
+                                {displayName}
+                              </div>
 
                               <div style={{ fontSize: "0.825rem", color: "#6B7280", marginBottom: "0.5rem" }}>
-                                {order.qty ?? (Array.isArray(order.items) ? order.items.length : 0)} tiles · ฿{(order.total || 0).toLocaleString()}
+                                {getTileCount(order)} tiles · {(order.currency || "฿")}{(order.total || 0).toLocaleString()}
                               </div>
 
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -539,8 +654,39 @@ export default function AdminClient() {
               <div style={{ padding: "2rem", maxWidth: 1000, margin: "0 auto" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2rem" }}>
                   <div>
-                    <h1 style={{ fontSize: "1.875rem", fontWeight: "bold", color: "#111827", marginBottom: "0.5rem" }}>{selectedOrder.id}</h1>
+                    <h1 style={{ fontSize: "1.875rem", fontWeight: "bold", color: "#111827", marginBottom: "0.5rem" }}>
+                      {selectedOrder.id}
+                    </h1>
                     <p style={{ color: "#6B7280" }}>Created on {formatDate(selectedOrder.createdAt)}</p>
+
+                    <p style={{ color: "#374151", marginTop: 6, fontWeight: 800 }}>
+                      Customer: {customer?.name?.trim() ? customer.name : "Unknown User"}
+                      {customer?.phone ? ` · ${customer.phone}` : ""}
+                    </p>
+
+                    {/* ✅ NEW: 고객 상세 정보 표시 */}
+                    <div style={{ marginTop: 10, color: "#374151", fontSize: "0.875rem", lineHeight: 1.6 }}>
+                      {customer?.email ? (
+                        <div><span style={{ color: "#6B7280", fontWeight: 700 }}>Email:</span> {customer.email}</div>
+                      ) : (
+                        <div><span style={{ color: "#6B7280", fontWeight: 700 }}>Email:</span> —</div>
+                      )}
+
+                      {fullAddress ? (
+                        <div><span style={{ color: "#6B7280", fontWeight: 700 }}>Address:</span> {fullAddress}</div>
+                      ) : (
+                        <div><span style={{ color: "#6B7280", fontWeight: 700 }}>Address:</span> —</div>
+                      )}
+
+                      {customer?.instagram ? (
+                        <div>
+                          <span style={{ color: "#6B7280", fontWeight: 700 }}>Instagram:</span>{" "}
+                          {customer.instagram.startsWith("@") ? customer.instagram : `@${customer.instagram}`}
+                        </div>
+                      ) : (
+                        <div><span style={{ color: "#6B7280", fontWeight: 700 }}>Instagram:</span> —</div>
+                      )}
+                    </div>
                   </div>
 
                   <div style={{ display: "flex", gap: "1rem" }}>
@@ -578,8 +724,8 @@ export default function AdminClient() {
                 <div style={{ backgroundColor: "white", padding: "1.5rem", borderRadius: 12, border: "1px solid #E5E7EB", boxShadow: "0 1px 2px rgba(0,0,0,0.05)", marginBottom: "2rem" }}>
                   <h3 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "1rem" }}>Order Summary</h3>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-                    <span style={{ color: "#6B7280" }}>Standard Tiles x {items.length}</span>
-                    <span style={{ fontWeight: 500 }}>฿{(selectedOrder.total || 0).toLocaleString()}</span>
+                    <span style={{ color: "#6B7280" }}>Standard Tiles x {getTileCount(selectedOrder)}</span>
+                    <span style={{ fontWeight: 500 }}>{(selectedOrder.currency || "฿")}{(selectedOrder.total || 0).toLocaleString()}</span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1rem" }}>
                     <span style={{ color: "#6B7280" }}>Shipping</span>
@@ -587,7 +733,7 @@ export default function AdminClient() {
                   </div>
                   <div style={{ borderTop: "1px solid #F3F4F6", paddingTop: "1rem", display: "flex", justifyContent: "space-between", fontSize: "1.125rem", fontWeight: "bold" }}>
                     <span>Total</span>
-                    <span>฿{(selectedOrder.total || 0).toLocaleString()}</span>
+                    <span>{(selectedOrder.currency || "฿")}{(selectedOrder.total || 0).toLocaleString()}</span>
                   </div>
                 </div>
 
@@ -599,6 +745,7 @@ export default function AdminClient() {
                         {items.length} files
                       </span>
                     </div>
+
                     <div style={{ display: "flex", gap: "0.75rem" }}>
                       <button
                         onClick={() => {
@@ -620,7 +767,24 @@ export default function AdminClient() {
                         {isSelectMode ? "Cancel Selection" : "Select"}
                       </button>
 
-                      <button style={{ padding: "0.5rem 1rem", fontSize: "0.875rem", borderRadius: 6, border: "1px solid #E5E7EB", backgroundColor: "white", cursor: "pointer", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <button
+                        onClick={() => {
+                          if (selectedPhotoIds.size > 0) handleDownloadSelected();
+                          else handleDownloadAll();
+                        }}
+                        style={{
+                          padding: "0.5rem 1rem",
+                          fontSize: "0.875rem",
+                          borderRadius: 6,
+                          border: "1px solid #E5E7EB",
+                          backgroundColor: "white",
+                          cursor: "pointer",
+                          fontWeight: 600,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                        }}
+                      >
                         <Download size={16} />
                         {selectedPhotoIds.size > 0 ? `Download Selected (${selectedPhotoIds.size})` : "Download All"}
                       </button>
@@ -648,7 +812,12 @@ export default function AdminClient() {
                           }}
                         >
                           {url ? (
-                            <img src={url} alt={photo.filename || "Photo"} style={{ width: "100%", height: "100%", objectFit: "cover", opacity: isSelectMode && !isSelected ? 0.6 : 1 }} />
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={url}
+                              alt={photo.filename || "Photo"}
+                              style={{ width: "100%", height: "100%", objectFit: "cover", opacity: isSelectMode && !isSelected ? 0.6 : 1 }}
+                            />
                           ) : (
                             <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "#F3F4F6" }}>
                               <ImageIcon size={32} color="#D1D5DB" />
@@ -662,12 +831,6 @@ export default function AdminClient() {
                           {isSelectMode && (
                             <div style={{ position: "absolute", top: 8, right: 8, width: 20, height: 20, backgroundColor: isSelected ? "#3B82F6" : "rgba(255,255,255,0.8)", borderRadius: "50%", border: isSelected ? "none" : "2px solid white", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}>
                               {isSelected && <Check size={14} color="white" />}
-                            </div>
-                          )}
-
-                          {!isSelectMode && url && (
-                            <div style={{ position: "absolute", top: 4, right: 4, backgroundColor: "white", borderRadius: "50%", padding: 2, boxShadow: "0 1px 2px rgba(0,0,0,0.1)" }}>
-                              <Check size={12} color="black" />
                             </div>
                           )}
                         </div>
@@ -694,6 +857,7 @@ export default function AdminClient() {
             </button>
 
             <div style={{ position: "relative", maxWidth: "100%", maxHeight: "100%" }} onClick={(e) => e.stopPropagation()}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={getPhotoUrl(lightboxPhoto)} alt={lightboxPhoto.filename || "Photo"} style={{ maxWidth: "80vw", maxHeight: "80vh", borderRadius: 4 }} />
             </div>
           </div>

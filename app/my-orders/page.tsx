@@ -1,53 +1,76 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppLayout from "@/components/AppLayout";
 import { useApp } from "@/context/AppContext";
-import { ArrowLeft, Search, Package, Truck, CheckCircle2, CreditCard, Printer } from "lucide-react";
+import {
+  ArrowLeft,
+  Search,
+  Package,
+  Truck,
+  CheckCircle2,
+  CreditCard,
+  Printer,
+  ChevronRight,
+} from "lucide-react";
 
-type OrderStatus = "paid" | "printing" | "printed" | "shipping" | "delivered" | "cancelled" | "unknown";
+import { getOrders } from "@/utils/orders";
+
+type OrderStatus =
+  | "paid"
+  | "printing"
+  | "printed"
+  | "shipping"
+  | "delivered"
+  | "cancelled"
+  | "unknown";
 
 type OrderItem = {
   id: string;
-  // ✅ 크롭 결과(정사각형) 썸네일 URL (dataURL / blobURL / CDN URL 모두 가능)
   previewUrl?: string;
-  qty?: number; // 보통 1
+  src?: string;
+  qty?: number;
 };
 
 type Order = {
   id: string;
   createdAt?: string | number | Date;
-  status?: string; // admin에서 바뀔 예정
-  currency?: string;
+  status?: string;
+  currency?: string; // "฿" or "THB"
   total?: number;
   items?: OrderItem[];
+  itemsCount?: number;
 };
 
 function normalizeStatus(raw?: string): OrderStatus {
-  const v = (raw || "").toLowerCase();
+  const v = (raw || "").toLowerCase().trim();
   if (v === "paid") return "paid";
-  if (v.includes("print") && v.includes("ing")) return "printing";
   if (v === "printed") return "printed";
+  if (v.includes("print") && v.includes("ing")) return "printing";
   if (v.includes("ship")) return "shipping";
   if (v.includes("deliver")) return "delivered";
   if (v.includes("cancel")) return "cancelled";
   return "unknown";
 }
 
-function formatDate(d?: Order["createdAt"]) {
+function formatDate(d?: Order["createdAt"], language?: string) {
   if (!d) return "";
   const date = d instanceof Date ? d : new Date(d);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
+  const locale = language === "TH" ? "th-TH" : "en-US";
+  return date.toLocaleDateString(locale, { year: "numeric", month: "short", day: "2-digit" });
 }
 
 function formatMoney(total?: number, currency?: string) {
   if (typeof total !== "number") return "";
+  const c = (currency || "").trim();
+  if (c === "฿") return `฿${total.toFixed(0)}`;
+  if (!c) return `${total.toFixed(2)}`;
   try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency: currency || "USD" }).format(total);
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: c }).format(total);
   } catch {
-    return `${total.toFixed(2)} ${currency || ""}`.trim();
+    return `${c}${total.toFixed(2)}`;
   }
 }
 
@@ -81,10 +104,27 @@ export default function MyOrdersPage() {
     return v;
   };
 
-  // ✅ orders는 AppContext에 저장되어야 함 (아래 2번에서 같이 해결)
-  const orders: Order[] = (app?.orders || app?.myOrders || []) as Order[];
-
+  const [ordersState, setOrdersState] = useState<Order[]>([]);
   const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    const contextOrders: Order[] = (app?.orders || app?.myOrders || []) as Order[];
+    if (Array.isArray(contextOrders) && contextOrders.length) {
+      setOrdersState(contextOrders);
+      return;
+    }
+
+    try {
+      const stored = getOrders();
+      if (Array.isArray(stored)) setOrdersState(stored as Order[]);
+      else setOrdersState([]);
+    } catch {
+      setOrdersState([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const orders: Order[] = ordersState;
 
   const summary = useMemo(() => {
     const total = orders.length;
@@ -99,21 +139,17 @@ export default function MyOrdersPage() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return orders;
-
-    return orders.filter((o) => {
-      const id = (o.id || "").toLowerCase();
-      return id.includes(q);
-    });
+    return orders.filter((o) => (o.id || "").toLowerCase().includes(q));
   }, [orders, query]);
 
   const goHome = () => router.push("/");
-  const goEditor = () => router.push("/editor"); // 필요하면 "/app/editor"
+  const goEditor = () => router.push("/editor");
 
   return (
     <AppLayout>
       <div style={{ backgroundColor: "#F9FAFB", minHeight: "calc(100vh - 64px)", padding: "2rem 0" }}>
         <div className="container" style={{ maxWidth: 980 }}>
-          {/* Header (✅ 상단 CTA 제거) */}
+          {/* Header */}
           <div
             className="card"
             style={{
@@ -124,34 +160,48 @@ export default function MyOrdersPage() {
               gap: "1rem",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+            {/* Left */}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", minWidth: 0 }}>
               <button
                 onClick={goHome}
                 className="btn btn-text"
-                style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  padding: "0.55rem 0.8rem",
+                  borderRadius: 999,
+                  border: "1px solid var(--border)",
+                  background: "white",
+                  fontWeight: 900,
+                }}
+                onMouseEnter={(e) => ((e.currentTarget.style.background = "#F9FAFB"), (e.currentTarget.style.borderColor = "#E5E7EB"))}
+                onMouseLeave={(e) => ((e.currentTarget.style.background = "white"), (e.currentTarget.style.borderColor = "var(--border)"))}
               >
-                <ArrowLeft size={18} />
+                <ArrowLeft size={16} />
                 {tr("home", "Home")}
               </button>
 
               <div style={{ width: 1, height: 28, background: "var(--border)" }} />
 
-              <div>
-                <div style={{ fontSize: "1.25rem", fontWeight: 900 }}>{tr("myOrdersTitle", "My Orders")}</div>
-                <div style={{ fontSize: 12, color: "var(--text-tertiary)", fontWeight: 600 }}>
-                  {tr("myOrdersSubtitle", "Your paid orders and delivery status updates.")}
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: "1.25rem", fontWeight: 950, lineHeight: 1.1 }}>
+                  {tr("myOrdersTitle", "My Orders")}
+                </div>
+                <div style={{ fontSize: 12, color: "var(--text-tertiary)", fontWeight: 650, marginTop: 6 }}>
+                  {tr("myOrdersSubtitle", "Your orders and delivery updates.")}
                 </div>
               </div>
             </div>
 
-            {/* 검색만 유지 */}
+            {/* Search */}
             <div
               style={{
-                minWidth: 300,
+                minWidth: 320,
                 display: "flex",
                 alignItems: "center",
                 gap: "0.5rem",
-                padding: "0.6rem 0.75rem",
+                padding: "0.65rem 0.85rem",
                 border: "1px solid var(--border)",
                 borderRadius: 999,
                 background: "white",
@@ -177,9 +227,21 @@ export default function MyOrdersPage() {
               gap: "0.75rem",
             }}
           >
-            <SummaryCard label="Active" value={summary.active} helper="Paid / Printing / Shipping" />
-            <SummaryCard label="Delivered" value={summary.delivered} helper="Completed orders" />
-            <SummaryCard label="Total" value={summary.total} helper="All time" />
+            <SummaryCard
+              label={tr("active", "Active")}
+              value={summary.active}
+              helper={tr("ordersSummaryActiveHelper", "Paid / Printing / Printed / Shipping")}
+            />
+            <SummaryCard
+              label={tr("delivered", "Delivered")}
+              value={summary.delivered}
+              helper={tr("ordersSummaryDeliveredHelper", "Completed orders")}
+            />
+            <SummaryCard
+              label={tr("total", "Total")}
+              value={summary.total}
+              helper={tr("ordersSummaryTotalHelper", "All time")}
+            />
           </div>
 
           {/* Body */}
@@ -207,7 +269,6 @@ export default function MyOrdersPage() {
                   {tr("noOrdersSubtitle", "After checkout, your order will appear here with status updates and previews.")}
                 </div>
 
-                {/* ✅ Start a new order는 여기(1곳)만 */}
                 <div style={{ marginTop: 20 }}>
                   <button className="btn btn-primary" onClick={goEditor} style={{ padding: "0.95rem 1.25rem" }}>
                     {tr("startNewOrder", "Start a new order")}
@@ -224,7 +285,11 @@ export default function MyOrdersPage() {
                     return db - da;
                   })
                   .map((o) => (
-                    <OrderRow key={o.id} order={o} onOpen={() => router.push(`/my-orders/${encodeURIComponent(o.id)}`)} />
+                    <OrderRow
+                      key={o.id}
+                      order={o}
+                      onOpen={() => router.push(`/myorder/${encodeURIComponent(o.id)}`)}
+                    />
                   ))}
               </div>
             )}
@@ -246,12 +311,35 @@ function SummaryCard({ label, value, helper }: { label: string; value: number; h
 }
 
 function OrderRow({ order, onOpen }: { order: any; onOpen: () => void }) {
+  const app = useApp() as any;
+  const t = app?.t as ((key: string) => string) | undefined;
+
+  const tr = (key: string, fallback: string) => {
+    const v = t?.(key);
+    if (!v || v === key) return fallback;
+    return v;
+  };
+
   const s = normalizeStatus(order.status);
   const meta = statusMeta(s);
   const Icon = meta.icon;
 
+  const statusLabelKey: Record<OrderStatus, string> = {
+    paid: "orderStatusPaid",
+    printing: "orderStatusPrinting",
+    printed: "orderStatusPrinted",
+    shipping: "orderStatusShipping",
+    delivered: "orderStatusDelivered",
+    cancelled: "orderStatusCancelled",
+    unknown: "orderStatusProcessing",
+  };
+  const statusLabel = tr(statusLabelKey[s] || "orderStatusProcessing", meta.label);
+
   const previews: string[] = Array.isArray(order.items)
-    ? order.items.map((it: any) => it.previewUrl).filter(Boolean).slice(0, 4)
+    ? order.items
+        .map((it: any) => it.previewUrl || it.src)
+        .filter(Boolean)
+        .slice(0, 4)
     : [];
 
   const itemsCount =
@@ -262,16 +350,31 @@ function OrderRow({ order, onOpen }: { order: any; onOpen: () => void }) {
   return (
     <div
       className="card"
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") onOpen();
+      }}
       style={{
         padding: "1rem",
         display: "grid",
         gridTemplateColumns: "1fr auto",
         gap: "1rem",
         alignItems: "center",
+        cursor: "pointer",
+        transition: "transform 0.12s ease, box-shadow 0.12s ease",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = "translateY(-1px)";
+        e.currentTarget.style.boxShadow = "0 10px 30px rgba(0,0,0,0.06)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.boxShadow = "";
       }}
     >
-      <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-        {/* status icon */}
+      <div style={{ display: "flex", gap: "1rem", alignItems: "center", minWidth: 0 }}>
         <div
           style={{
             width: 46,
@@ -289,7 +392,6 @@ function OrderRow({ order, onOpen }: { order: any; onOpen: () => void }) {
           <Icon size={20} />
         </div>
 
-        {/* main */}
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
             <div style={{ fontWeight: 950, fontSize: 15 }}>{order.id}</div>
@@ -304,17 +406,16 @@ function OrderRow({ order, onOpen }: { order: any; onOpen: () => void }) {
                 color: meta.color,
               }}
             >
-              {meta.label}
+              {statusLabel}
             </span>
           </div>
 
           <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontWeight: 600, marginTop: 4 }}>
-            {formatDate(order.createdAt)}
-            {itemsCount ? ` · ${itemsCount} tiles` : ""}
+            {formatDate(order.createdAt, app?.language)}
+            {itemsCount ? ` · ${itemsCount} ${tr("tilesUnit", "tiles")}` : ""}
             {order.total != null ? ` · ${formatMoney(order.total, order.currency)}` : ""}
           </div>
 
-          {/* ✅ Preview thumbnails (크롭된 결과가 있으면 보여줌) */}
           {previews.length > 0 && (
             <div style={{ display: "flex", gap: "0.35rem", marginTop: "0.6rem" }}>
               {previews.map((src, idx) => (
@@ -330,7 +431,6 @@ function OrderRow({ order, onOpen }: { order: any; onOpen: () => void }) {
                     flex: "0 0 auto",
                   }}
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={src} alt="tile preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 </div>
               ))}
@@ -339,8 +439,28 @@ function OrderRow({ order, onOpen }: { order: any; onOpen: () => void }) {
         </div>
       </div>
 
-      <button onClick={onOpen} className="btn btn-text" style={{ fontWeight: 950 }}>
-        View →
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpen();
+        }}
+        className="btn btn-text"
+        style={{
+          fontWeight: 950,
+          padding: "0.6rem 0.85rem",
+          borderRadius: 999,
+          border: "1px solid var(--border)",
+          background: "white",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 8,
+          whiteSpace: "nowrap",
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "#F9FAFB")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
+      >
+        {tr("viewOrder", "View")}
+        <ChevronRight size={16} />
       </button>
     </div>
   );

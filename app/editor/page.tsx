@@ -21,39 +21,51 @@ import {
 
 import AppLayout from "../../components/AppLayout";
 import { useApp } from "../../context/AppContext";
-import { getOrders, canEdit } from "../../utils/orders";
+import { getOrders, canEdit } from "@/utils/orders";
 
 type UploadItem = {
   id: string;
   status?: string;
   isCropped?: boolean;
 
-  // ✅ 업로드 이미지 미리보기용
-  src?: string; // objectURL
+  src?: string; // objectURL (편집화면용)
   fileName?: string;
+
+  previewUrl?: string; // dataURL (주문/리스트용 영구) - ✅ 크롭 결과
 };
 
 type CropState = {
-  zoom: number;
-  dragPos: { x: number; y: number };
+  zoom: number; // 1 ~ 3
+  dragPos: { x: number; y: number }; // ✅ frame(px) 기준 이동량
   filter: string;
 };
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
+type ImgMeta = { w: number; h: number };
+
 const EDITOR_STATE_KEY = "MYTILE_EDITOR_STATE";
 const ORDER_ITEMS_KEY = "MYTILE_ORDER_ITEMS";
+const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15MB
 
 export default function EditorPage() {
-  // ✅ addTileToCart 추가
-  const { t, addTileToCart, cart } = useApp();
+  const app = useApp() as any;
+  const { t } = app || {};
+  const setCart = app?.setCart as ((v: any[]) => void) | undefined;
+
   const router = useRouter();
   const searchParams = useSearchParams();
+
+  const tr = (key: string, fallback: string) => {
+    const v = t?.(key);
+    if (!v || v === key) return fallback;
+    return v;
+  };
 
   const editOrderId = searchParams.get("editOrderId");
   const hasDevParam = searchParams.get("dev") === "1";
 
-  // --- STATE MANAGEMENT ---
+  // --- STATE ---
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [selectedUploadId, setSelectedUploadId] = useState<string | null>(null);
 
@@ -67,8 +79,16 @@ export default function EditorPage() {
   const [crops, setCrops] = useState<Record<string, CropState>>({});
   const [saveStatuses, setSaveStatuses] = useState<Record<string, SaveStatus>>({});
 
+  // ✅ 업로드 직후부터 "cover 기준"으로 정확히 렌더링/클램프하기 위한 메타
+  const [imgMetaMap, setImgMetaMap] = useState<Record<string, ImgMeta>>({});
+  const imgMetaRef = useRef<Record<string, ImgMeta>>({});
+  useEffect(() => {
+    imgMetaRef.current = imgMetaMap;
+  }, [imgMetaMap]);
+
+  const [frameSize, setFrameSize] = useState<number>(480);
+
   const [labState, setLabState] = useState({
-    photoSlot: "has-photo",
     uploadState: "idle",
     loadState: "loaded",
     interactionState: "ready",
@@ -76,10 +96,14 @@ export default function EditorPage() {
     validationError: "off",
   });
 
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartRef = useRef({ x: 0, y: 0 });
+  const [validationMessage, setValidationMessage] = useState<string>(
+    tr("errorLoadingPhoto", "Unsupported file type or file too large.")
+  );
 
-  // ✅ hidden file input (한 개만 유지: 중복 업로드 방지 핵심)
+  // ✅ cropper frame size를 얻기 위한 ref
+  const frameRef = useRef<HTMLDivElement | null>(null);
+
+  // ✅ hidden file input (하나만)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pendingTargetIdRef = useRef<string | null>(null);
 
@@ -87,32 +111,41 @@ export default function EditorPage() {
   const isFilePickerOpeningRef = useRef(false);
   const lastPickerOpenAtRef = useRef(0);
 
-  // ✅ objectURL 정리(메모리 누수 방지)
+  // ✅ objectURL 관리
   const objectUrlMapRef = useRef<Record<string, string>>({}); // id -> objectURL
 
-  // ✅ 드래그 후 발생하는 ghost click 방지
+  // ✅ drag state
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
   const preventClickUntilRef = useRef(0);
   const didPointerDownRef = useRef(false);
   const movedEnoughRef = useRef(false);
 
-  // ✅ 안정화: 최신 uploads/cart 참조
+  // ✅ stale 방지 refs
   const uploadsRef = useRef<UploadItem[]>(uploads);
   useEffect(() => {
     uploadsRef.current = uploads;
   }, [uploads]);
 
-  const cartRef = useRef<any[]>(Array.isArray(cart) ? cart : []);
+  const cropsRef = useRef<Record<string, CropState>>(crops);
   useEffect(() => {
-    cartRef.current = Array.isArray(cart) ? cart : [];
-  }, [cart]);
+    cropsRef.current = crops;
+  }, [crops]);
 
-  // ✅ 타이머 정리
+  const saveStatusesRef = useRef<Record<string, SaveStatus>>(saveStatuses);
+  useEffect(() => {
+    saveStatusesRef.current = saveStatuses;
+  }, [saveStatuses]);
+
+  // ✅ 타이머 유틸
   const timeoutsRef = useRef<number[]>([]);
   const setSafeTimeout = (fn: () => void, ms: number) => {
     const id = window.setTimeout(fn, ms);
     timeoutsRef.current.push(id);
     return id;
   };
+
+  // ✅ cleanup + objectURL revoke
   useEffect(() => {
     return () => {
       timeoutsRef.current.forEach((id) => window.clearTimeout(id));
@@ -125,6 +158,34 @@ export default function EditorPage() {
       });
       objectUrlMapRef.current = {};
     };
+  }, []);
+
+  // ✅ 파일 다이얼로그 Cancel 시 lock 해제
+  useEffect(() => {
+    const onFocus = () => {
+      window.setTimeout(() => {
+        isFilePickerOpeningRef.current = false;
+      }, 200);
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
+  // ✅ frame size 실시간 측정(ResizeObserver)
+  useEffect(() => {
+    if (!frameRef.current) return;
+
+    const el = frameRef.current;
+    const apply = () => {
+      const rect = el.getBoundingClientRect();
+      const w = Math.round(rect.width || 480);
+      if (w > 0) setFrameSize(w);
+    };
+    apply();
+
+    const ro = new ResizeObserver(() => apply());
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   const FILTERS = useMemo(
@@ -143,21 +204,18 @@ export default function EditorPage() {
     []
   );
 
+  const getFilterStyle = (filterName: string) => {
+    return FILTERS.find((f) => f.name === filterName)?.style || "none";
+  };
+
   // ---------------------------
-  // ✅ editor 상태를 sessionStorage에 저장/복원
+  // ✅ editor 상태 저장/복원
   // ---------------------------
   const persistEditorState = () => {
     try {
-      const payload = {
-        uploads,
-        crops,
-        saveStatuses,
-        selectedUploadId,
-      };
+      const payload = { uploads, crops, saveStatuses, selectedUploadId };
       sessionStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(payload));
-    } catch {
-      // ignore
-    }
+    } catch {}
   };
 
   useEffect(() => {
@@ -166,7 +224,7 @@ export default function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uploads, crops, saveStatuses, selectedUploadId, editOrderId]);
 
-  // --- INITIALIZATION ---
+  // --- INIT ---
   useEffect(() => {
     if (editOrderId) {
       const orders = getOrders();
@@ -186,7 +244,13 @@ export default function EditorPage() {
           filter: item.filter || "Original",
         };
         initialStatuses[item.id] = "saved";
-        return { ...item, status: "cropped", isCropped: true };
+
+        return {
+          ...item,
+          status: "cropped",
+          isCropped: true,
+          previewUrl: item.previewUrl || item.src,
+        };
       });
 
       setUploads(loadedUploads);
@@ -196,7 +260,6 @@ export default function EditorPage() {
       return;
     }
 
-    // ✅ (일반 진입) sessionStorage에 editor 상태가 있으면 복원
     try {
       const raw = sessionStorage.getItem(EDITOR_STATE_KEY);
       if (raw) {
@@ -209,24 +272,16 @@ export default function EditorPage() {
           return;
         }
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
 
-    // ✅ 초기 1슬롯 자동 생성
     const firstId = `u-${Date.now()}`;
-    const firstUpload: UploadItem = { id: firstId, status: "needs-crop", isCropped: false };
-    setUploads([firstUpload]);
-    setCrops({
-      [firstId]: { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" },
-    });
+    setUploads([{ id: firstId, status: "needs-crop", isCropped: false }]);
+    setCrops({ [firstId]: { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" } });
     setSaveStatuses({});
     setSelectedUploadId(firstId);
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editOrderId, router]);
 
-  // Keyboard trigger for Dev Mode
+  // Dev toggle
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -251,27 +306,89 @@ export default function EditorPage() {
 
   const currentSaveStatus: SaveStatus = selectedUploadId ? saveStatuses[selectedUploadId] || "idle" : "idle";
 
+  const isValidationError = labState.validationError === "on";
+  const isUploading = labState.uploadState === "uploading";
+  const isLoadingImage = labState.loadState === "loading";
+
+  const hasPhoto = !!selectedUpload?.src;
+
+  const canInteractWithImage =
+    hasPhoto && !isUploading && !isLoadingImage && labState.interactionState !== "disabled";
+  const interactionsDisabled = !canInteractWithImage;
+
+  // ✅ "사진 있는 슬롯"만 대상으로 allSaved 판단
+  const photos = useMemo(() => uploads.filter((u) => !!u.src), [uploads]);
+  const savedCount = useMemo(() => photos.filter((u) => saveStatuses[u.id] === "saved").length, [photos, saveStatuses]);
+  const allPhotosSaved = useMemo(() => photos.length > 0 && photos.every((u) => saveStatuses[u.id] === "saved"), [photos, saveStatuses]);
+
+  const checkoutDisabled =
+    !allPhotosSaved || isLoadingImage || labState.checkoutState === "disabled" || isNavigating;
+
+  // ---------------------------
+  // ✅ cover 기반 실제 clamp (Mixtiles처럼 "원본 끝까지" 이동 가능)
+  // ---------------------------
+  const getCoverSizePx = (imgMeta?: ImgMeta) => {
+    const size = frameSize || 480;
+    if (!imgMeta || !imgMeta.w || !imgMeta.h) {
+      // 메타 없으면 fallback: frame 기준(기존처럼 보수적으로)
+      return { w: size, h: size, baseScale: 1 };
+    }
+    const baseScale = Math.max(size / imgMeta.w, size / imgMeta.h);
+    return { w: imgMeta.w * baseScale, h: imgMeta.h * baseScale, baseScale };
+  };
+
+  const clampDrag = (id: string, next: { x: number; y: number }, zoom: number) => {
+    const size = frameSize || 480;
+
+    const meta = imgMetaRef.current[id];
+    const cover = getCoverSizePx(meta);
+
+    // zoom 적용 후 실제 렌더링 크기
+    const zw = cover.w * (zoom || 1);
+    const zh = cover.h * (zoom || 1);
+
+    // 프레임보다 큰 만큼만 이동 허용 (빈 공간 방지)
+    const maxX = Math.max(0, (zw - size) / 2);
+    const maxY = Math.max(0, (zh - size) / 2);
+
+    const cx = Math.max(-maxX, Math.min(maxX, next.x));
+    const cy = Math.max(-maxY, Math.min(maxY, next.y));
+    return { x: cx, y: cy };
+  };
+
   const updateCurrentCrop = (updates: Partial<CropState>) => {
     if (!selectedUploadId) return;
-    setCrops((prev) => ({
-      ...prev,
-      [selectedUploadId]: { ...(prev[selectedUploadId] || currentCrop), ...updates },
-    }));
+
+    setCrops((prev) => {
+      const base = prev[selectedUploadId] || currentCrop;
+      const next = { ...base, ...updates };
+
+      // drag 변경 시 clamp
+      if (updates.dragPos) {
+        next.dragPos = clampDrag(selectedUploadId, updates.dragPos, next.zoom);
+      }
+
+      // zoom 변경 시에도 clamp(현재 drag 유지하되 범위 재계산)
+      if (typeof updates.zoom === "number") {
+        next.dragPos = clampDrag(selectedUploadId, next.dragPos, next.zoom);
+      }
+
+      return { ...prev, [selectedUploadId]: next };
+    });
+
     if (currentSaveStatus === "saved") {
       setSaveStatuses((prev) => ({ ...prev, [selectedUploadId]: "idle" }));
     }
   };
 
   // ---------------------------
-  // ✅ 업로드 핵심 로직 (중복 방지)
+  // ✅ 업로드 로직
   // ---------------------------
-
   const ensureSlot = (): string => {
     if (selectedUploadId) return selectedUploadId;
 
     const newId = `u-${Date.now()}`;
-    const newUpload: UploadItem = { id: newId, status: "needs-crop", isCropped: false };
-    setUploads((prev) => [...prev, newUpload]);
+    setUploads((prev) => [...prev, { id: newId, status: "needs-crop", isCropped: false }]);
     setCrops((prev) => ({ ...prev, [newId]: { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" } }));
     setSelectedUploadId(newId);
     return newId;
@@ -289,9 +406,15 @@ export default function EditorPage() {
     const id = targetId || ensureSlot();
     pendingTargetIdRef.current = id;
 
+    if (fileInputRef.current) fileInputRef.current.value = "";
+
     requestAnimationFrame(() => {
       fileInputRef.current?.click();
     });
+
+    setSafeTimeout(() => {
+      isFilePickerOpeningRef.current = false;
+    }, 1500);
   };
 
   const applyFileToSlot = (slotId: string, file: File) => {
@@ -305,6 +428,7 @@ export default function EditorPage() {
     }
     objectUrlMapRef.current[slotId] = nextUrl;
 
+    // ✅ 업로드 초기 crop: "가운데 기준"
     setUploads((prev) =>
       prev.map((u) =>
         u.id === slotId
@@ -314,19 +438,33 @@ export default function EditorPage() {
               fileName: file.name,
               status: "needs-crop",
               isCropped: false,
+              previewUrl: undefined,
             }
           : u
       )
     );
 
+    // ✅ 메타는 새로 로드될 때 다시 채움
+    setImgMetaMap((prev) => {
+      const next = { ...prev };
+      delete next[slotId];
+      return next;
+    });
+
     setSaveStatuses((prev) => ({ ...prev, [slotId]: "idle" }));
     setCrops((prev) => ({
       ...prev,
-      [slotId]: prev[slotId] || { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" },
+      [slotId]: { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" },
     }));
     setSelectedUploadId(slotId);
 
-    setLabState((ps) => ({ ...ps, uploadState: "idle", loadState: "loaded", photoSlot: "has-photo" }));
+    setLabState((ps) => ({ ...ps, uploadState: "idle", loadState: "loaded", validationError: "off" }));
+  };
+
+  const isHeicLike = (file: File) => {
+    const name = (file.name || "").toLowerCase();
+    const type = (file.type || "").toLowerCase();
+    return name.endsWith(".heic") || name.endsWith(".heif") || type.includes("heic") || type.includes("heif");
   };
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -342,7 +480,25 @@ export default function EditorPage() {
       return;
     }
 
+    if (isHeicLike(file)) {
+      setValidationMessage(tr("heicNotSupported", "HEIC/HEIF is not supported yet. Please upload JPG, PNG, or WebP."));
+      setLabState((ps) => ({ ...ps, validationError: "on" }));
+      setSafeTimeout(() => setLabState((ps) => ({ ...ps, validationError: "off" })), 3500);
+      pendingTargetIdRef.current = null;
+      return;
+    }
+
     if (!file.type.startsWith("image/")) {
+      setValidationMessage(tr("errorLoadingPhoto", "Unsupported file type. Please upload an image."));
+      setLabState((ps) => ({ ...ps, validationError: "on" }));
+      setSafeTimeout(() => setLabState((ps) => ({ ...ps, validationError: "off" })), 2500);
+      pendingTargetIdRef.current = null;
+      return;
+    }
+
+    if (file.size > MAX_FILE_BYTES) {
+      const mb = Math.round((MAX_FILE_BYTES / (1024 * 1024)) * 10) / 10;
+      setValidationMessage(`File too large. Please upload under ${mb}MB.`);
       setLabState((ps) => ({ ...ps, validationError: "on" }));
       setSafeTimeout(() => setLabState((ps) => ({ ...ps, validationError: "off" })), 2500);
       pendingTargetIdRef.current = null;
@@ -357,8 +513,7 @@ export default function EditorPage() {
     if (uploads.length >= 20) return;
 
     const newId = `u-${Date.now()}`;
-    const newUpload: UploadItem = { id: newId, status: "needs-crop", isCropped: false };
-    setUploads((prev) => [...prev, newUpload]);
+    setUploads((prev) => [...prev, { id: newId, status: "needs-crop", isCropped: false }]);
     setCrops((prev) => ({ ...prev, [newId]: { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" } }));
     setSelectedUploadId(newId);
 
@@ -376,60 +531,76 @@ export default function EditorPage() {
 
     setUploads((prev) =>
       prev.map((u) =>
-        u.id === id
-          ? {
-              ...u,
-              src: undefined,
-              fileName: undefined,
-              isCropped: false,
-              status: "needs-crop",
-            }
-          : u
+        u.id === id ? { ...u, src: undefined, fileName: undefined, isCropped: false, status: "needs-crop", previewUrl: undefined } : u
       )
     );
 
     setSaveStatuses((prev) => ({ ...prev, [id]: "idle" }));
-    setCrops((prev) => ({
-      ...prev,
-      [id]: { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" },
-    }));
+    setCrops((prev) => ({ ...prev, [id]: { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" } }));
 
-    if (selectedUploadId !== id) return;
+    setImgMetaMap((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   };
 
-  const [showAllSavedToast, setShowAllSavedToast] = useState(false);
+  // ---------------------------
+  // ✅ "보이는 그대로" 캔버스에 렌더링 (좌표계 정확히 맞춤)
+  // ---------------------------
+  const createCroppedPreviewDataUrl = async (src: string, crop: CropState): Promise<string> => {
+    const SIZE = 640;
 
-  const savedCount = useMemo(
-    () => uploads.filter((u) => saveStatuses[u.id] === "saved").length,
-    [uploads, saveStatuses]
-  );
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("Image load failed"));
+      i.src = src;
+    });
 
-  const isValidationError = labState.validationError === "on";
-  const isUploading = labState.uploadState === "uploading";
-  const isLoadingImage = labState.loadState === "loading";
+    const canvas = document.createElement("canvas");
+    canvas.width = SIZE;
+    canvas.height = SIZE;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas not supported");
 
-  const hasPhoto = !!selectedUpload?.src;
+    const filterStyle = getFilterStyle(crop.filter);
+    ctx.filter = filterStyle === "none" ? "none" : filterStyle;
 
-  const canInteractWithImage = hasPhoto && !isUploading && !isLoadingImage && labState.interactionState !== "disabled";
-  const interactionsDisabled = !canInteractWithImage;
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
 
-  const checkoutDisabled = savedCount === 0 || isLoadingImage || labState.checkoutState === "disabled" || isNavigating;
+    // ✅ cover(가운데 정렬) 기본 스케일
+    const baseScale = Math.max(SIZE / iw, SIZE / ih);
+
+    // ✅ 최종 스케일 = cover * zoom
+    const scale = baseScale * (crop.zoom || 1);
+
+    const drawW = iw * scale;
+    const drawH = ih * scale;
+
+    // ✅ drag(px)는 frame 기준 → canvas 기준으로 변환
+    const toCanvas = SIZE / (frameSize || 480);
+    const dx = (crop.dragPos?.x || 0) * toCanvas;
+    const dy = (crop.dragPos?.y || 0) * toCanvas;
+
+    // ✅ "가운데 기준" 배치
+    const centerX = SIZE / 2 + dx;
+    const centerY = SIZE / 2 + dy;
+
+    const drawX = centerX - drawW / 2;
+    const drawY = centerY - drawH / 2;
+
+    // background
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, SIZE, SIZE);
+
+    ctx.drawImage(img, drawX, drawY, drawW, drawH);
+
+    return canvas.toDataURL("image/jpeg", 0.92);
+  };
 
   // --- HANDLERS ---
-
-  // ✅ (경고 해결) addTileToCart는 "상태 업데이트 계산 함수" 안에서 호출하지 않는다.
-  const enqueueAddToCart = (tile: any) => {
-    // 다음 tick에서 실행 -> 렌더 중 setState 경고 회피
-    setSafeTimeout(() => {
-      try {
-        const already = cartRef.current?.some((x: any) => x?.id === tile?.id);
-        if (!already) addTileToCart(tile);
-      } catch {
-        // ignore
-      }
-    }, 0);
-  };
-
   const handleSaveCrop = () => {
     if (!hasPhoto || interactionsDisabled || currentSaveStatus === "saving" || !selectedUploadId) return;
 
@@ -438,85 +609,66 @@ export default function EditorPage() {
     setIsDragging(false);
     setSaveStatuses((prev) => ({ ...prev, [savingId]: "saving" }));
 
-    setSafeTimeout(() => {
-      // 1) 업로드 상태 업데이트
-      setUploads((prev) => prev.map((u) => (u.id === savingId ? { ...u, isCropped: true } : u)));
-
-      // 2) SaveStatus 업데이트 (여기서는 "상태"만 처리)
-      setSaveStatuses((prev) => {
-        const newStatuses: Record<string, SaveStatus> = { ...prev, [savingId]: "saved" };
-
-        // ✅ Save = checkout용 sessionStorage 저장
-        try {
-          const orderItems = uploadsRef.current
-            .filter((u) => newStatuses[u.id] === "saved")
-            .map((u) => ({ ...u, ...crops[u.id] }));
-          sessionStorage.setItem(ORDER_ITEMS_KEY, JSON.stringify(orderItems));
-        } catch {
-          // ignore
-        }
-
-        return newStatuses;
-      });
-
-      // 3) cart 추가는 "상태 업데이트 밖"에서 처리 (경고 원인 제거)
+    setSafeTimeout(async () => {
       try {
-        const u = uploadsRef.current.find((x) => x.id === savingId);
-        const crop = crops[savingId];
-        if (u?.src && crop) {
-          enqueueAddToCart({
-            id: savingId,
-            previewUrl: u.src,
-            fileName: u.fileName,
-            zoom: crop.zoom,
-            dragPos: crop.dragPos,
-            filter: crop.filter,
-            createdAt: new Date().toISOString(),
-            status: "paid", // 기본값: admin에서 변경 예정
-          });
-        }
-      } catch {
-        // ignore
-      }
-
-      // 4) 다음 편집 대상으로 이동 / 토스트
-      setSafeTimeout(() => {
         const latestUploads = uploadsRef.current;
+        const u = latestUploads.find((x) => x.id === savingId);
+        const crop = cropsRef.current[savingId];
+        if (!u?.src || !crop) throw new Error("Missing src/crop");
 
-        // 최신 saveStatuses는 아직 React state에 반영되기 전일 수 있으니
-        // "저장된 것" 판단을 위해 현재 저장 id만 확실히 saved로 보고
-        const nextUnsaved = latestUploads.find((u) => u.id !== savingId && saveStatuses[u.id] !== "saved");
+        const previewDataUrl = await createCroppedPreviewDataUrl(u.src, crop);
 
-        if (nextUnsaved) {
-          setSelectedUploadId(nextUnsaved.id);
-        } else {
-          const allSaved = latestUploads.every((u) => u.id === savingId || saveStatuses[u.id] === "saved");
-          if (allSaved) {
-            setShowAllSavedToast(true);
-            setSafeTimeout(() => setShowAllSavedToast(false), 3000);
-          }
-        }
-      }, 600);
-    }, 500);
+        setUploads((prev) =>
+          prev.map((item) =>
+            item.id === savingId ? { ...item, isCropped: true, previewUrl: previewDataUrl, status: "cropped" } : item
+          )
+        );
+
+        setSaveStatuses((prev) => ({ ...prev, [savingId]: "saved" }));
+
+        try {
+          const nextStatuses = { ...(saveStatusesRef.current || {}), [savingId]: "saved" as SaveStatus };
+          const orderItems = uploadsRef.current
+            .filter((x) => !!x.src && nextStatuses[x.id] === "saved")
+            .map((x) => ({
+              id: x.id,
+              previewUrl: x.id === savingId ? previewDataUrl : x.previewUrl,
+              src: x.src,
+              fileName: x.fileName,
+              zoom: cropsRef.current[x.id]?.zoom,
+              dragPos: cropsRef.current[x.id]?.dragPos,
+              filter: cropsRef.current[x.id]?.filter,
+              qty: 1,
+            }));
+          sessionStorage.setItem(ORDER_ITEMS_KEY, JSON.stringify(orderItems));
+        } catch {}
+      } catch {
+        setSaveStatuses((prev) => ({ ...prev, [savingId]: "error" }));
+        setSafeTimeout(() => setSaveStatuses((prev) => ({ ...prev, [savingId]: "idle" })), 1200);
+      }
+    }, 80);
   };
 
   const handleContinueToCheckout = () => {
     if (isNavigating) return;
 
-    if (uploads.length === 0) {
+    if (photos.length === 0) {
       setShowGuidance({ title: "Upload a photo to continue", subtitle: "You need at least 1 tile for an order." });
       setSafeTimeout(() => setShowGuidance(null), 3000);
       return;
     }
 
     if (isLoadingImage) {
-      setShowGuidance({ title: "Loading photo...", subtitle: "Please wait until your photo is ready." });
+      setShowGuidance({
+        title: tr("loadingEditor", "Loading photo..."),
+        subtitle: tr("selectPhotoToEdit", "Please wait until your photo is ready."),
+      });
       setSafeTimeout(() => setShowGuidance(null), 3000);
       return;
     }
 
-    if (savedCount === 0) {
-      setShowGuidance({ title: "Save at least 1 crop", subtitle: "Tap 'Save This Crop' to continue." });
+    if (!allPhotosSaved) {
+      setShowGuidance({ title: "Save all crops to continue", subtitle: "Every uploaded photo must be saved." });
       setShouldNudgeSave(true);
       setSafeTimeout(() => {
         setShowGuidance(null);
@@ -534,34 +686,48 @@ export default function EditorPage() {
       window.clearTimeout(navTimer);
 
       const orderItems = uploads
-        .filter((u) => saveStatuses[u.id] === "saved")
-        .map((u) => ({ ...u, ...crops[u.id] }));
+        .filter((u) => !!u.src && saveStatuses[u.id] === "saved")
+        .map((u) => ({
+          id: u.id,
+          previewUrl: u.previewUrl,
+          src: u.src,
+          qty: 1,
+          zoom: crops[u.id]?.zoom,
+          dragPos: crops[u.id]?.dragPos,
+          filter: crops[u.id]?.filter,
+        }));
 
       sessionStorage.setItem(ORDER_ITEMS_KEY, JSON.stringify(orderItems));
+
+      if (typeof setCart === "function") {
+        setCart(orderItems);
+      }
+
       router.push("/checkout");
-    }, 300);
+    }, 250);
   };
 
   const handleReset = () => {
+    if (!selectedUploadId) return;
     updateCurrentCrop({ zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" });
   };
 
-  // --- POINTER DRAG LOGIC ---
+  // --- POINTER DRAG ---
   const startDragging = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!canInteractWithImage) return;
+    if (!canInteractWithImage || !selectedUploadId) return;
 
     didPointerDownRef.current = true;
     movedEnoughRef.current = false;
 
     e.preventDefault();
-
     e.currentTarget.setPointerCapture(e.pointerId);
+
     setIsDragging(true);
     dragStartRef.current = { x: e.clientX - currentCrop.dragPos.x, y: e.clientY - currentCrop.dragPos.y };
   };
 
   const onDragging = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDragging || !canInteractWithImage) return;
+    if (!isDragging || !canInteractWithImage || !selectedUploadId) return;
 
     const nextX = e.clientX - dragStartRef.current.x;
     const nextY = e.clientY - dragStartRef.current.y;
@@ -570,7 +736,7 @@ export default function EditorPage() {
     const dy = nextY - currentCrop.dragPos.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    if (!movedEnoughRef.current && dist >= 4) movedEnoughRef.current = true;
+    if (!movedEnoughRef.current && dist >= 2) movedEnoughRef.current = true;
 
     if (movedEnoughRef.current) {
       updateCurrentCrop({ dragPos: { x: nextX, y: nextY } });
@@ -592,25 +758,58 @@ export default function EditorPage() {
     }
   };
 
+  // ✅ 선택된 이미지의 cover 렌더 사이즈(프레임 px 기준)
+  const selectedMeta = selectedUploadId ? imgMetaMap[selectedUploadId] : undefined;
+  const coverPx = getCoverSizePx(selectedMeta);
+
   return (
     <AppLayout showFooter={false}>
-      <input ref={fileInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onFileChange} />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        style={{ display: "none" }}
+        onChange={onFileChange}
+      />
 
       <div style={{ backgroundColor: "#F9FAFB", minHeight: "100vh", paddingBottom: "120px" }}>
         <style
           dangerouslySetInnerHTML={{
             __html: `
-              .editor-grid { display: grid; grid-template-columns: 1fr 340px; gap: 3rem; padding-top: 1rem; }
+              .editor-grid { display: grid; grid-template-columns: 1fr 360px; gap: 3rem; padding-top: 1rem; }
               @media (max-width: 1023px) { .editor-grid { grid-template-columns: 1fr; gap: 1.5rem; padding-top: 0; } }
 
-              .cropper-frame { aspect-ratio: 1/1; width: 100%; max-width: 480px; margin: 0 auto; position: relative; overflow: hidden; background-color: #F3F4F6; border: 1px solid rgba(0,0,0,0.06); transition: all 0.2s; touch-action: none; }
+              .cropper-frame { 
+                aspect-ratio: 1/1; 
+                width: 100%; 
+                max-width: 520px; 
+                margin: 0 auto; 
+                position: relative; 
+                overflow: hidden; 
+                background-color: #F3F4F6; 
+                border: 1px solid rgba(0,0,0,0.06); 
+                transition: all 0.2s; 
+                touch-action: none; 
+                border-radius: 16px;
+              }
               .cropper-frame.ready { cursor: grab; }
-              .cropper-frame.ready:active { cursor: grabbing; border-color: var(--text-primary); }
+              .cropper-frame.ready:active { cursor: grabbing; border-color: rgba(17,24,39,0.4); }
 
               .album-strip { display: grid; grid-template-columns: repeat(10, 1fr); gap: 10px; margin-top: 2rem; }
               @media (max-width: 600px) { .album-strip { grid-template-columns: repeat(5, 1fr); } }
 
-              .filter-chip { padding: 6px 16px; border-radius: 999px; font-size: 13px; font-weight: 600; border: 1px solid var(--border); background: white; color: var(--text-secondary); cursor: pointer; white-space: nowrap; transition: all 0.2s; }
+              .filter-chip { 
+                padding: 8px 18px; 
+                border-radius: 999px; 
+                font-size: 14px; 
+                font-weight: 800; 
+                border: 1px solid var(--border); 
+                background: white; 
+                color: var(--text-secondary); 
+                cursor: pointer; 
+                white-space: nowrap; 
+                transition: all 0.2s; 
+              }
               .filter-chip.active { background: var(--text-primary); color: white; border-color: var(--text-primary); }
 
               .skeleton { background: linear-gradient(90deg, #f3f4f6 25%, #e5e7eb 50%, #f3f4f6 75%); background-size: 200% 100%; animation: skeleton-loading 1.5s infinite; }
@@ -633,7 +832,7 @@ export default function EditorPage() {
                 padding: 1rem;
                 border-radius: 1rem;
                 box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1);
-                min-width: 240px;
+                min-width: 260px;
                 z-index: 50;
                 animation: slide-up 0.3s ease-out;
               }
@@ -642,95 +841,40 @@ export default function EditorPage() {
                 to { opacity: 1; transform: translateX(-50%) translateY(-12px); }
               }
 
-              /* =========================
-                 Upload Card Effects (앱까지 고려: CSS-only, subtle)
-                 (1) Soft Pulse Ring + (4) Hover 강화 + (3) 아이콘 1회 Bounce
-                 ========================= */
-              .upload-card {
-                height: 100%;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 2rem;
-              }
-
+              /* ✅ Upload card: 효과 다시 강하게 + 가독성 업 */
+              .upload-card { height: 100%; display: flex; align-items: center; justify-content: center; padding: 2rem; }
               .upload-inner {
                 width: 100%;
-                max-width: 420px;
-                border-radius: 18px;
-                border: 1px solid rgba(0,0,0,0.08);
+                max-width: 460px;
+                border-radius: 22px;
+                border: 1px solid rgba(0,0,0,0.10);
                 background: #fff;
-                box-shadow: 0 6px 18px rgba(0,0,0,0.06);
-                padding: 26px;
+                box-shadow: 0 10px 28px rgba(0,0,0,0.08);
+                padding: 30px;
                 display: flex;
                 flex-direction: column;
                 align-items: center;
                 gap: 14px;
                 cursor: pointer;
-                transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+                transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
                 position: relative;
                 isolation: isolate;
                 outline: none;
               }
-
-              /* (4) Hover 강화 */
-              .upload-inner:hover {
-                transform: translateY(-1px);
-                box-shadow: 0 12px 30px rgba(0,0,0,0.08);
-                border-color: rgba(17,24,39,0.22);
-              }
-
-              .upload-inner:active { transform: translateY(0px) scale(0.995); }
+              .upload-inner:hover { transform: translateY(-2px); box-shadow: 0 16px 40px rgba(0,0,0,0.10); border-color: rgba(17,24,39,0.25); }
+              .upload-inner:active { transform: translateY(0px) scale(0.992); }
               .upload-inner:focus-visible {
-                box-shadow: 0 0 0 4px rgba(17,24,39,0.12), 0 12px 30px rgba(0,0,0,0.08);
-                border-color: rgba(17,24,39,0.28);
+                box-shadow: 0 0 0 5px rgba(17,24,39,0.12), 0 16px 40px rgba(0,0,0,0.10);
+                border-color: rgba(17,24,39,0.30);
               }
-
-              /* (1) Soft Pulse Ring */
-              .upload-inner::before {
-                content: "";
-                position: absolute;
-                inset: -10px;
-                border-radius: 22px;
-                border: 2px solid rgba(17,24,39,0.18);
-                opacity: 0;
-                transform: scale(0.98);
-                z-index: -1;
-                animation: upload-pulse 2.6s ease-in-out infinite;
-              }
-              @keyframes upload-pulse {
-                0%   { opacity: 0; transform: scale(0.98); }
-                25%  { opacity: 0.65; transform: scale(1.00); }
-                55%  { opacity: 0; transform: scale(1.02); }
-                100% { opacity: 0; transform: scale(1.02); }
-              }
-
-              /* reduce motion */
-              @media (prefers-reduced-motion: reduce) {
-                .upload-inner { transition: none; }
-                .upload-inner::before { animation: none; }
-                .upload-icon { animation: none !important; }
-              }
-
               .upload-icon {
-                width: 46px;
-                height: 46px;
-                border-radius: 14px;
+                width: 54px;
+                height: 54px;
+                border-radius: 16px;
                 background: rgba(17,24,39,0.08);
                 display: flex;
                 align-items: center;
                 justify-content: center;
-              }
-
-              /* (3) 아이콘 1회 Bounce (Upload 카드 mount 시 1회) */
-              .upload-icon.bounce-once {
-                animation: icon-bounce 620ms cubic-bezier(0.2, 0.9, 0.2, 1) 1;
-              }
-              @keyframes icon-bounce {
-                0%   { transform: translateY(0); }
-                35%  { transform: translateY(-5px); }
-                65%  { transform: translateY(1px); }
-                100% { transform: translateY(0); }
               }
 
               .thumb-action {
@@ -759,13 +903,13 @@ export default function EditorPage() {
             style={{
               display: "flex",
               alignItems: "center",
-              gap: "0.25rem",
+              gap: "0.35rem",
               color: "var(--text-tertiary)",
-              fontSize: "0.8125rem",
-              fontWeight: "600",
+              fontSize: "0.95rem",
+              fontWeight: 800,
             }}
           >
-            <ChevronLeft size={16} /> {t("backToHome") || "Back"}
+            <ChevronLeft size={18} /> {t?.("backToHome") || tr("cancel", "Back")}
           </Link>
         </div>
 
@@ -774,54 +918,51 @@ export default function EditorPage() {
             {isValidationError && (
               <div
                 style={{
-                  marginBottom: "1.5rem",
-                  padding: "0.75rem 1rem",
+                  marginBottom: "1.2rem",
+                  padding: "0.9rem 1.1rem",
                   background: "#FEF2F2",
                   border: "1px solid #FEE2E2",
-                  borderRadius: "8px",
+                  borderRadius: "12px",
                   color: "#991B1B",
-                  fontSize: "0.8125rem",
+                  fontSize: "0.95rem",
+                  fontWeight: 700,
                   display: "flex",
                   alignItems: "center",
-                  gap: "0.5rem",
+                  gap: "0.6rem",
                 }}
               >
-                <AlertCircle size={14} /> Unsupported file type or file too large.
+                <AlertCircle size={18} /> {validationMessage}
               </div>
             )}
 
-            {/* ✅ 큰 크롭 영역 */}
+            {/* ✅ 크롭 영역 */}
             <div
+              ref={frameRef}
               className={`cropper-frame ${canInteractWithImage ? "ready" : ""}`}
               onPointerDown={startDragging}
               onPointerMove={onDragging}
               onPointerUp={stopDragging}
               onPointerCancel={stopDragging}
               onPointerLeave={stopDragging}
-              onClickCapture={(e) => {
+              onClick={(e) => {
                 if (isFilePickerOpeningRef.current) {
                   e.preventDefault();
                   e.stopPropagation();
                   return;
                 }
-
                 if (Date.now() < preventClickUntilRef.current) {
                   e.preventDefault();
                   e.stopPropagation();
                   return;
                 }
-
                 if (hasPhoto) {
                   e.preventDefault();
                   e.stopPropagation();
                   return;
                 }
-
                 openFilePickerFor(selectedUploadId || undefined);
               }}
-              style={{
-                cursor: hasPhoto ? "grab" : "pointer",
-              }}
+              style={{ cursor: hasPhoto ? "grab" : "pointer" }}
             >
               {!hasPhoto ? (
                 <div className="upload-card">
@@ -844,57 +985,86 @@ export default function EditorPage() {
                       openFilePickerFor(selectedUploadId || undefined);
                     }}
                   >
-                    {/* 아이콘 1회 bounce: 카드가 보이는 순간(=hasPhoto false) mount되니 1회 실행됨 */}
-                    <div className="upload-icon bounce-once">
-                      <Upload size={22} />
+                    <div className="upload-icon">
+                      <Upload size={26} />
                     </div>
-                    <div style={{ fontSize: "18px", fontWeight: 900, color: "#111827" }}>Upload Photos</div>
-                    <div style={{ fontSize: "12px", fontWeight: 600, color: "rgba(17,24,39,0.55)" }}>
-                      Pick a moment you love
+                    <div style={{ fontSize: "22px", fontWeight: 950, color: "#111827", letterSpacing: "-0.02em" }}>
+                      {tr("uploadPhotos", "Upload Photos")}
+                    </div>
+                    <div style={{ fontSize: "14px", fontWeight: 800, color: "rgba(17,24,39,0.60)" }}>
+                      {tr("selectPhotoToEdit", "Pick a moment you love")}
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 12, color: "rgba(17,24,39,0.45)", fontWeight: 800 }}>
+                      JPG / PNG / WebP only
                     </div>
                   </div>
                 </div>
               ) : isLoadingImage ? (
                 <div className="skeleton" style={{ width: "100%", height: "100%" }} />
               ) : (
-                <div
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    transform: `translate(${currentCrop.dragPos.x}px, ${currentCrop.dragPos.y}px) scale(${currentCrop.zoom})`,
-                    filter: FILTERS.find((f) => f.name === currentCrop.filter)?.style || "none",
-                    transition: isDragging ? "none" : "transform 0.15s ease-out",
-                  }}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                <>
+                  {/* ✅ Mixtiles 방식: "cover 스케일"을 직접 계산해 업로드 직후 흰여백/짤림 방지 */}
                   <img
+                    key={selectedUpload?.src} // src 바뀌면 확실히 리셋
                     src={selectedUpload?.src}
                     alt={selectedUpload?.fileName || "Uploaded photo"}
+                    onLoad={(e) => {
+                      if (!selectedUploadId) return;
+                      const img = e.currentTarget;
+                      const w = img.naturalWidth || 0;
+                      const h = img.naturalHeight || 0;
+                      if (w > 0 && h > 0) {
+                        setImgMetaMap((prev) => {
+                          const next = { ...prev, [selectedUploadId]: { w, h } };
+                          return next;
+                        });
+
+                        // ✅ 메타 들어온 순간, 현재 drag/zoom 기준으로 clamp 한번 해서
+                        // 업로드 직후에도 빈영역/짤림 없게 안정화
+                        setCrops((prev) => {
+                          const base = prev[selectedUploadId] || { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" };
+                          const clamped = clampDrag(selectedUploadId, base.dragPos, base.zoom);
+                          return { ...prev, [selectedUploadId]: { ...base, dragPos: clamped } };
+                        });
+                      }
+                    }}
                     style={{
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "cover",
-                      display: "block",
+                      position: "absolute",
+                      left: "50%",
+                      top: "50%",
+
+                      // cover(프레임기준)로 만든 실제 px 사이즈
+                      width: `${coverPx.w}px`,
+                      height: `${coverPx.h}px`,
+
+                      transform: `translate(-50%, -50%) translate(${currentCrop.dragPos.x}px, ${currentCrop.dragPos.y}px) scale(${currentCrop.zoom})`,
+                      transformOrigin: "50% 50%",
+                      filter: getFilterStyle(currentCrop.filter),
+
+                      transition: isDragging ? "none" : "transform 0.12s ease-out",
+                      willChange: "transform",
+
                       userSelect: "none",
                       pointerEvents: "none",
+                      display: "block",
                     }}
                     draggable={false}
                   />
-                </div>
+                </>
               )}
             </div>
 
-            {/* 컨트롤 영역 */}
+            {/* 컨트롤 */}
             <div
               style={{
-                maxWidth: "480px",
+                maxWidth: "520px",
                 margin: "2rem auto 0",
                 opacity: canInteractWithImage ? 1 : 0.3,
                 pointerEvents: canInteractWithImage ? "auto" : "none",
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "2rem" }}>
-                <ZoomOut size={22} strokeWidth={1.5} />
+              <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1.6rem" }}>
+                <ZoomOut size={24} strokeWidth={1.6} />
                 <div style={{ flex: 1 }}>
                   <input
                     type="range"
@@ -903,18 +1073,35 @@ export default function EditorPage() {
                     step="0.01"
                     value={currentCrop.zoom}
                     onChange={(e) => updateCurrentCrop({ zoom: parseFloat(e.target.value) })}
-                    style={{ width: "100%", accentColor: "var(--text-primary)", height: "2px", background: "#E5E7EB" }}
+                    style={{ width: "100%", accentColor: "var(--text-primary)", height: "3px", background: "#E5E7EB" }}
                   />
                 </div>
-                <ZoomIn size={22} strokeWidth={1.5} />
-                <button onClick={handleReset} style={{ marginLeft: "0.5rem", color: "var(--text-tertiary)" }}>
-                  <RefreshCcw size={14} />
+                <ZoomIn size={24} strokeWidth={1.6} />
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  style={{
+                    marginLeft: "0.25rem",
+                    color: "var(--text-tertiary)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 36,
+                    height: 36,
+                    borderRadius: 999,
+                    background: "white",
+                    border: "1px solid rgba(0,0,0,0.08)",
+                    boxShadow: "0 6px 14px rgba(0,0,0,0.06)",
+                  }}
+                >
+                  <RefreshCcw size={16} />
                 </button>
               </div>
 
-              <div style={{ display: "flex", gap: "8px", overflowX: "auto", paddingBottom: "12px" }}>
+              <div style={{ display: "flex", gap: "10px", overflowX: "auto", paddingBottom: "12px" }}>
                 {FILTERS.map((f) => (
                   <button
+                    type="button"
                     key={f.name}
                     className={`filter-chip ${currentCrop.filter === f.name ? "active" : ""}`}
                     onClick={() => updateCurrentCrop({ filter: f.name })}
@@ -924,21 +1111,22 @@ export default function EditorPage() {
                 ))}
               </div>
 
-              <div style={{ textAlign: "center", marginTop: "1.5rem" }}>
+              <div style={{ textAlign: "center", marginTop: "1.4rem" }}>
                 <button
+                  type="button"
                   onClick={handleSaveCrop}
                   className={`btn btn-primary ${shouldNudgeSave ? "nudge-pulse" : ""}`}
                   disabled={!hasPhoto || interactionsDisabled || currentSaveStatus === "saving" || currentSaveStatus === "saved"}
                   style={{
-                    padding: "0.875rem 2.5rem",
+                    padding: "1rem 2.8rem",
                     borderRadius: "999px",
-                    fontSize: "0.9375rem",
-                    fontWeight: "700",
-                    minWidth: "180px",
+                    fontSize: "1.02rem",
+                    fontWeight: 900,
+                    minWidth: "210px",
                     display: "inline-flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    gap: "8px",
+                    gap: "10px",
                   }}
                 >
                   {currentSaveStatus === "saving" ? (
@@ -947,31 +1135,31 @@ export default function EditorPage() {
                     </>
                   ) : currentSaveStatus === "saved" ? (
                     <>
-                      <Check size={18} color="#10B981" strokeWidth={3} />{" "}
-                      <span style={{ color: "#10B981" }}>Saved</span>
+                      <Check size={18} color="#10B981" strokeWidth={3} />
+                      <span style={{ color: "#10B981" }}>{tr("success", "Saved")}</span>
                     </>
                   ) : (
-                    "Save This Crop"
+                    tr("saveCrop", "Save crop")
                   )}
                 </button>
               </div>
             </div>
 
-            {/* ✅ 썸네일 스트립 (선택/재업로드/삭제) */}
+            {/* ✅ 썸네일: previewUrl(크롭 결과) 우선 표시 */}
             <div className="album-strip">
               {uploads.map((u) => (
                 <div key={u.id} style={{ position: "relative" }}>
                   {u.src && (
                     <button
+                      type="button"
                       className="thumb-action"
-                      aria-label="Remove photo"
+                      aria-label={tr("deletePhoto", "Remove photo")}
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
                         handleClearPhoto(u.id);
                       }}
-                      title="Remove photo"
-                      type="button"
+                      title={tr("deletePhoto", "Remove photo")}
                     >
                       <X size={14} />
                     </button>
@@ -987,7 +1175,7 @@ export default function EditorPage() {
                     }}
                     style={{
                       aspectRatio: "1/1",
-                      borderRadius: "0.5rem",
+                      borderRadius: "0.6rem",
                       backgroundColor: "#E5E7EB",
                       cursor: "pointer",
                       border: selectedUploadId === u.id ? "2px solid var(--text-primary)" : "2px solid transparent",
@@ -998,15 +1186,14 @@ export default function EditorPage() {
                       position: "relative",
                     }}
                   >
-                    {u.src ? (
-                      // eslint-disable-next-line @next/next/no-img-element
+                    {u.previewUrl || u.src ? (
                       <img
-                        src={u.src}
+                        src={(u.previewUrl || u.src) as string}
                         alt={u.fileName || "thumb"}
                         style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                       />
                     ) : (
-                      <ImageIcon size={20} color="#9CA3AF" />
+                      <ImageIcon size={22} color="#9CA3AF" />
                     )}
                   </div>
 
@@ -1019,8 +1206,8 @@ export default function EditorPage() {
                         background: "white",
                         border: "1px solid #10B981",
                         borderRadius: "50%",
-                        width: "16px",
-                        height: "16px",
+                        width: "18px",
+                        height: "18px",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -1028,17 +1215,18 @@ export default function EditorPage() {
                         zIndex: 10,
                       }}
                     >
-                      <Check size={10} color="#10B981" strokeWidth={4} />
+                      <Check size={11} color="#10B981" strokeWidth={4} />
                     </div>
                   )}
                 </div>
               ))}
 
               <button
+                type="button"
                 onClick={handleAddSlotAndUpload}
                 style={{
                   aspectRatio: "1/1",
-                  borderRadius: "0.5rem",
+                  borderRadius: "0.6rem",
                   border: "1px solid var(--border)",
                   display: "flex",
                   alignItems: "center",
@@ -1046,10 +1234,11 @@ export default function EditorPage() {
                   color: "var(--text-tertiary)",
                   background: "white",
                   cursor: "pointer",
+                  boxShadow: "0 8px 16px rgba(0,0,0,0.05)",
                 }}
-                aria-label="Add photo"
+                aria-label={tr("addMorePhotos", "Add photo")}
               >
-                <Plus size={20} />
+                <Plus size={22} />
               </button>
             </div>
           </div>
@@ -1059,22 +1248,26 @@ export default function EditorPage() {
             <div
               style={{
                 backgroundColor: "white",
-                padding: "2rem",
+                padding: "2.1rem",
                 borderRadius: "1.5rem",
                 border: "1px solid var(--border)",
                 position: "sticky",
                 top: "100px",
               }}
             >
-              <h3 style={{ fontSize: "0.9375rem", fontWeight: "800", marginBottom: "1.5rem" }}>Order Summary</h3>
+              <h3 style={{ fontSize: "1.05rem", fontWeight: 950, marginBottom: "1.5rem" }}>
+                {tr("orderSummary", "Order Summary")}
+              </h3>
 
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem", marginBottom: "2rem" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.875rem" }}>
-                  <span style={{ color: "var(--text-secondary)" }}>Quantity</span>
-                  <span style={{ fontWeight: "700" }}>{savedCount} tiles</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: "1rem", marginBottom: "2rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.98rem" }}>
+                  <span style={{ color: "var(--text-secondary)", fontWeight: 800 }}>{tr("tilesCount", "Quantity")}</span>
+                  <span style={{ fontWeight: 950 }}>
+                    {savedCount} {tr("tilesUnit", "tiles")}
+                  </span>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "1rem", fontWeight: "800" }}>
-                  <span>Price</span>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "1.1rem", fontWeight: 950 }}>
+                  <span>{tr("payment", "Price")}</span>
                   <span>฿{savedCount * 200}</span>
                 </div>
               </div>
@@ -1085,8 +1278,8 @@ export default function EditorPage() {
                     <div style={{ display: "flex", gap: "0.75rem" }}>
                       <div
                         style={{
-                          width: "32px",
-                          height: "32px",
+                          width: "34px",
+                          height: "34px",
                           borderRadius: "50%",
                           backgroundColor: "#F3F4F6",
                           display: "flex",
@@ -1098,42 +1291,48 @@ export default function EditorPage() {
                         <Info size={16} />
                       </div>
                       <div>
-                        <p style={{ fontSize: "0.875rem", fontWeight: "800", color: "var(--text-primary)", marginBottom: "2px" }}>
+                        <p style={{ fontSize: "0.95rem", fontWeight: 950, color: "var(--text-primary)", marginBottom: "2px" }}>
                           {showGuidance.title}
                         </p>
-                        <p style={{ fontSize: "0.75rem", color: "var(--text-tertiary)" }}>{showGuidance.subtitle}</p>
+                        <p style={{ fontSize: "0.82rem", fontWeight: 800, color: "var(--text-tertiary)" }}>
+                          {showGuidance.subtitle}
+                        </p>
                       </div>
                     </div>
                   </div>
                 )}
 
                 <button
+                  type="button"
                   onClick={handleContinueToCheckout}
                   className="btn btn-primary"
+                  disabled={checkoutDisabled}
                   style={{
                     width: "100%",
-                    padding: "1rem",
+                    padding: "1.05rem",
                     borderRadius: "999px",
-                    fontWeight: "800",
+                    fontWeight: 950,
+                    fontSize: "1rem",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    gap: "8px",
+                    gap: "10px",
+                    opacity: checkoutDisabled ? 0.6 : 1,
                   }}
                 >
                   {isNavigating ? (
                     <>
-                      <Loader2 size={18} className="animate-spin" /> Loading...
+                      <Loader2 size={18} className="animate-spin" /> {tr("loadingEditor", "Loading...")}
                     </>
                   ) : (
-                    "Continue to checkout"
+                    tr("proceedToCheckout", "Proceed to Checkout")
                   )}
                 </button>
               </div>
 
               {navTimerExceeded && (
-                <p style={{ marginTop: "8px", textAlign: "center", fontSize: "11px", color: "var(--text-tertiary)" }}>
-                  Preparing checkout...
+                <p style={{ marginTop: "10px", textAlign: "center", fontSize: "0.82rem", color: "var(--text-tertiary)", fontWeight: 700 }}>
+                  {tr("loadingEditor", "Preparing checkout...")}
                 </p>
               )}
             </div>
@@ -1176,31 +1375,28 @@ export default function EditorPage() {
                     </select>
                   </div>
                 ))}
+
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ marginTop: 10 }}
+                  onClick={() => {
+                    try {
+                      sessionStorage.removeItem(EDITOR_STATE_KEY);
+                      sessionStorage.removeItem(ORDER_ITEMS_KEY);
+                      localStorage.removeItem("memotiles_orders");
+                      localStorage.removeItem("memotiles_seeded_v2");
+                      if (typeof setCart === "function") setCart([]);
+                      location.reload();
+                    } catch {}
+                  }}
+                >
+                  Reset editor storage
+                </button>
               </div>
             </div>
           </div>
         )}
-
-        <div style={{ position: "fixed", top: "100px", left: "50%", transform: "translateX(-50%)", zIndex: 1000 }}>
-          {showAllSavedToast && (
-            <div
-              style={{
-                padding: "0.625rem 1.25rem",
-                backgroundColor: "#111827",
-                color: "white",
-                borderRadius: "999px",
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                fontSize: "0.8125rem",
-                fontWeight: "600",
-                boxShadow: "0 10px 15px -3px rgba(0,0,0,0.3)",
-              }}
-            >
-              <Check size={14} color="#10B981" /> All photos saved
-            </div>
-          )}
-        </div>
       </div>
     </AppLayout>
   );
