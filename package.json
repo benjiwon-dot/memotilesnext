@@ -9,6 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "firebase": "^12.7.0",
+    "heic2any": "^0.0.4",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.562.0",
     "next": "16.1.1",
     "react": "19.2.3",
@@ -22,6 +25,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "tailwindcss": "^4",
+    "tree-cli": "^0.6.7",
     "typescript": "^5"
   }
 }

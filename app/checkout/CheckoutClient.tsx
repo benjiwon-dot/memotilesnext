@@ -4,26 +4,24 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppLayout from "@/components/AppLayout";
 import { useApp } from "@/context/AppContext";
-import { CreditCard, Image as ImageIcon } from "lucide-react";
+import { CreditCard, Image as ImageIcon, Loader2 } from "lucide-react";
 
-// ✅ 너 프로젝트에 이미 있는 orders 유틸을 그대로 사용
+// ✅ uid-scoped orders 유틸
 import { createOrder } from "@/utils/orders";
+
+// ✅ blob/data url → firebase downloadURL
+import { ensureStorageUrl } from "@/utils/storageUpload";
 
 type OrderItem = {
   id: string;
   previewUrl?: string;
   src?: string;
   qty?: number;
-  // (선택) editor에서 넘어오는 추가 필드들도 섞일 수 있으니 열어둠
-  zoom?: number;
-  dragPos?: { x: number; y: number };
-  filter?: string;
-  fileName?: string;
 };
 
 type ShippingAddress = {
   fullName: string;
-  email?: string; // ✅ optional
+  email: string; // ✅ 필수
   address1: string;
   address2?: string;
   city: string;
@@ -31,72 +29,100 @@ type ShippingAddress = {
   postalCode: string;
   country: string;
   phone: string;
-  instagram?: string; // ✅ optional
+  instagram?: string;
 };
 
-// ✅ Editor와 동일 키
-const ORDER_ITEMS_KEY = "MYTILE_ORDER_ITEMS";
+const SESSION_KEY = "MYTILE_ORDER_ITEMS";
 
-function safeParseJSON<T>(raw: string | null): T | null {
-  if (!raw) return null;
+function safeParseItems(raw: string | null): OrderItem[] {
+  if (!raw) return [];
   try {
-    return JSON.parse(raw) as T;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((x) => x && typeof x.id === "string");
   } catch {
-    return null;
+    return [];
   }
+}
+
+function pickItemUrl(it: OrderItem) {
+  return (it.previewUrl || it.src || "").trim();
+}
+
+function userFriendlyCheckoutError(err: any) {
+  const code = String(err?.code || "");
+  const msg = String(err?.message || "");
+
+  // Firebase Storage 자주 나오는 케이스들
+  if (code === "storage/retry-limit-exceeded") {
+    return "사진 업로드가 계속 실패해서 시간 초과가 났습니다. (Storage 재시도 한도 초과)\nStorage Rules/CORS 설정을 확인한 뒤 다시 시도해 주세요.";
+  }
+  if (code === "storage/unauthorized" || code === "storage/unauthenticated") {
+    return "Storage 업로드 권한이 없습니다. 로그인 상태와 Storage Rules(쓰기 권한)를 확인해 주세요.";
+  }
+  if (code === "storage/canceled") {
+    return "업로드가 취소되었습니다. 다시 시도해 주세요.";
+  }
+  if (code === "storage/unknown") {
+    return "알 수 없는 Storage 오류가 발생했습니다. 콘솔 로그를 확인해 주세요.";
+  }
+
+  // CORS 류는 보통 message에 'CORS' 또는 'blocked by CORS'가 들어감
+  if (msg.toLowerCase().includes("cors") || msg.toLowerCase().includes("blocked by cors")) {
+    return "브라우저가 Storage 업로드 요청을 CORS 정책 때문에 차단했습니다.\nFirebase Storage 설정/Rules 또는 도메인 설정을 확인해야 합니다.";
+  }
+
+  // 그 외
+  return msg || "Checkout failed. Please try again.";
 }
 
 export default function CheckoutClient() {
   const router = useRouter();
   const app = useApp() as any;
-  const t = app?.t as ((key: string) => string) | undefined;
 
+  const t = app?.t as ((key: string) => string) | undefined;
   const tr = (key: string, fallback: string) => {
     const v = t?.(key);
     if (!v || v === key) return fallback;
     return v;
   };
 
-  // ✅ 1) checkout은 "이번 주문"을 sessionStorage에서 읽는 것이 정답
-  //    (이전 주문이 cart에 남아 섞이는 문제를 원천 차단)
-  const [sessionItems, setSessionItems] = useState<OrderItem[]>([]);
+  const cartFromCtx: OrderItem[] = (app?.cart || []) as OrderItem[];
+  const [hydrating, setHydrating] = useState(true);
 
   useEffect(() => {
-    const parsed = safeParseJSON<OrderItem[]>(sessionStorage.getItem(ORDER_ITEMS_KEY));
-    if (Array.isArray(parsed)) {
-      setSessionItems(parsed);
-    } else {
-      setSessionItems([]);
+    if (app?.authLoading) return;
+
+    if (Array.isArray(cartFromCtx) && cartFromCtx.length > 0) {
+      setHydrating(false);
+      return;
     }
-  }, []);
 
-  // ✅ 2) 그래도 app.cart가 있을 수 있으니 fallback로만 사용(최후 수단)
-  const cartFallback: OrderItem[] = (app?.cart || []) as OrderItem[];
+    try {
+      const raw = sessionStorage.getItem(SESSION_KEY);
+      const sessionItems = safeParseItems(raw);
 
-  // ✅ 실제 결제/주문 생성에 쓸 items
-  const items: OrderItem[] = useMemo(() => {
-    const base = sessionItems.length ? sessionItems : cartFallback;
-
-    // ✅ qty 기본 1, previewUrl 우선, src는 fallback
-    const normalized = (Array.isArray(base) ? base : [])
-      .filter((it) => !!it?.id)
-      .map((it) => ({
-        ...it,
-        qty: Number(it.qty) || 1,
-        previewUrl: it.previewUrl || undefined,
-        src: it.src || undefined,
-      }));
-
-    // ✅ 중복 id 제거(혹시라도 섞였을 때 안전장치)
-    const seen = new Set<string>();
-    const deduped: OrderItem[] = [];
-    for (const it of normalized) {
-      if (seen.has(it.id)) continue;
-      seen.add(it.id);
-      deduped.push(it);
+      if (sessionItems.length > 0) {
+        if (typeof app?.setCart === "function") {
+          app.setCart(
+            sessionItems.map((it) => ({
+              id: it.id,
+              previewUrl: it.previewUrl,
+              src: it.src,
+              qty: it.qty ?? 1,
+            }))
+          );
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setHydrating(false);
     }
-    return deduped;
-  }, [sessionItems, cartFallback]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app?.authLoading]);
+
+  const cart: OrderItem[] = cartFromCtx;
 
   const [shipping, setShipping] = useState<ShippingAddress>({
     fullName: "",
@@ -113,110 +139,133 @@ export default function CheckoutClient() {
 
   const [isPaying, setIsPaying] = useState(false);
 
-  // ✅ 가격 로직 (지금은 tile당 200)
-  const tilesCount = useMemo(() => {
-    return Array.isArray(items)
-      ? items.reduce((sum, it) => sum + (Number(it.qty) || 1), 0)
-      : 0;
-  }, [items]);
+  // ✅ 업로드 진행상태
+  const [uploadLabel, setUploadLabel] = useState<string>("");
 
-  const total = useMemo(() => tilesCount * 200, [tilesCount]);
+  const total = useMemo(() => {
+    const count = Array.isArray(cart)
+      ? cart.reduce((sum, it) => sum + (Number(it.qty) || 1), 0)
+      : 0;
+    return count * 200;
+  }, [cart]);
+
+  const tilesCount = useMemo(() => {
+    return Array.isArray(cart)
+      ? cart.reduce((sum, it) => sum + (Number(it.qty) || 1), 0)
+      : 0;
+  }, [cart]);
 
   const onPay = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!items?.length) return;
+    if (!cart?.length) return;
+
+    const uid = app?.user?.uid as string | undefined;
+    if (!uid) {
+      router.replace(`/login?next=${encodeURIComponent("/checkout")}`);
+      return;
+    }
+
+    // ✅ 이메일 필수 검증
+    const email = (shipping.email || "").trim();
+    if (!email) {
+      alert("Email is required.");
+      return;
+    }
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      alert("Please enter a valid email address.");
+      return;
+    }
+
+    setIsPaying(true);
+    setUploadLabel("");
 
     try {
-      setIsPaying(true);
-
-      // ✅ 빈 문자열은 저장 시 깔끔하게 undefined로 정리
       const cleanedShipping: ShippingAddress = {
         ...shipping,
-        fullName: shipping.fullName?.trim() || "",
-        email: shipping.email?.trim() || undefined,
-        address1: shipping.address1?.trim() || "",
+        email, // ✅ 절대 undefined 금지
         address2: shipping.address2?.trim() || undefined,
-        city: shipping.city?.trim() || "",
         state: shipping.state?.trim() || undefined,
-        postalCode: shipping.postalCode?.trim() || "",
-        country: shipping.country?.trim() || "Thailand",
-        phone: shipping.phone?.trim() || "",
         instagram: shipping.instagram?.trim() || undefined,
       };
 
-      // ✅ 필수값 최소 검증(UX 해치지 않게 아주 얕게)
-      if (!cleanedShipping.fullName || !cleanedShipping.address1 || !cleanedShipping.city || !cleanedShipping.postalCode || !cleanedShipping.phone) {
-        alert(tr("fillRequired", "Please fill in required fields."));
-        setIsPaying(false);
-        return;
+      // ✅ orderId를 먼저 만들어 업로드 경로에 사용
+      const orderId = `ORD-${Date.now()}`;
+
+      const uploadedItems: OrderItem[] = [];
+
+      for (let i = 0; i < cart.length; i++) {
+        const it = cart[i];
+        const url = pickItemUrl(it);
+
+        setUploadLabel(`Uploading photo ${i + 1} / ${cart.length}…`);
+
+        const finalUrl = url
+          ? await ensureStorageUrl({
+              url,
+              uid,
+              orderId,
+              index: i,
+            })
+          : "";
+
+        // ✅ 핵심: 업로드 실패면 여기서 바로 중단 -> 무한 processing 방지
+        if (!finalUrl) {
+          throw new Error("Image upload failed. Please try again.");
+        }
+
+        uploadedItems.push({
+          ...it,
+          previewUrl: finalUrl,
+          src: finalUrl,
+          qty: it.qty ?? 1,
+        });
       }
 
-      // ✅ 모든 아이템 qty 기본 1 유지 + "미리보기 우선"
-      const normalizedItems: OrderItem[] = items.map((it) => ({
-        ...it,
-        qty: Number(it.qty) || 1,
-        previewUrl: it.previewUrl || it.src, // ✅ Admin/리스트 미리보기 안정화
-      }));
+      setUploadLabel("Creating order…");
 
-      // ✅ 구형 Admin UI 호환 shipping(legacy)
-      const legacyShipping = {
-        name: cleanedShipping.fullName,
-        email: cleanedShipping.email,
-        phone: cleanedShipping.phone,
-        instagram: cleanedShipping.instagram,
-        address: cleanedShipping.address1,
-        address2: cleanedShipping.address2,
-        city: cleanedShipping.city,
-        state: cleanedShipping.state,
-        postalCode: cleanedShipping.postalCode,
-        country: cleanedShipping.country,
-      };
-
-      const newOrder = createOrder({
-        items: normalizedItems,
+      const newOrder = createOrder(uid, {
+        items: uploadedItems,
         total,
         currency: "฿",
-
-        // ✅ 신형
         shippingAddress: cleanedShipping,
-
-        // ✅ 구형 호환
-        shipping: legacyShipping,
       });
 
-      // ✅✅✅ 핵심: 결제 성공 후 "이번 주문 임시 데이터" 삭제
-      // - 다음 주문에서 이전 주문이 checkout에 섞여 보이는 현상 방지
-      try {
-        sessionStorage.removeItem(ORDER_ITEMS_KEY);
-        sessionStorage.removeItem("MYTILE_EDITOR_STATE"); // editor 복원 상태도 제거(원하면 유지 가능)
-      } catch {}
-
-      // (선택) AppContext cart를 쓰는 곳이 있으면 비우기
       if (typeof app?.setCart === "function") app.setCart([]);
 
+      setUploadLabel("");
       router.push(`/order-success?orderId=${encodeURIComponent(newOrder.id)}`);
+    } catch (err: any) {
+      console.error(err);
+      alert(userFriendlyCheckoutError(err));
+      setUploadLabel("");
     } finally {
       setIsPaying(false);
     }
   };
 
-  // ✅ cart/sessionItems 둘다 비면 checkout 접근 못하게
-  if (!items || items.length === 0) {
+  if (hydrating) {
     return (
       <AppLayout>
         <div className="container" style={{ textAlign: "center", padding: "4rem 1rem" }}>
-          <div style={{ fontSize: 22, fontWeight: 950 }}>
-            {tr("cartEmpty", "Your cart is empty")}
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 10, color: "var(--text-tertiary)" }}>
+            <Loader2 className="animate-spin" size={18} />
+            <span style={{ fontWeight: 650 }}>{tr("loading", "Loading your cart…")}</span>
           </div>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (!cart || cart.length === 0) {
+    return (
+      <AppLayout>
+        <div className="container" style={{ textAlign: "center", padding: "4rem 1rem" }}>
+          <div style={{ fontSize: 22, fontWeight: 950 }}>{tr("cartEmpty", "Your cart is empty")}</div>
           <div style={{ marginTop: 10, color: "var(--text-tertiary)", fontWeight: 650 }}>
             {tr("cartEmptyHint", "Add some photos first, then come back to checkout.")}
           </div>
 
-          <button
-            onClick={() => router.push("/editor")}
-            className="btn btn-primary"
-            style={{ marginTop: "1.25rem" }}
-          >
+          <button onClick={() => router.push("/editor")} className="btn btn-primary" style={{ marginTop: "1.25rem" }}>
             {tr("goToDashboard", "Go to editor")}
           </button>
         </div>
@@ -232,7 +281,7 @@ export default function CheckoutClient() {
         </h1>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: "4rem" }}>
-          {/* Left: Shipping & Payment */}
+          {/* Left */}
           <div>
             <h2 style={{ fontSize: "1.25rem", fontWeight: 800, marginBottom: "1.5rem" }}>
               {tr("shippingAddress", "Shipping address")}
@@ -241,11 +290,7 @@ export default function CheckoutClient() {
             <form
               id="checkout-form"
               onSubmit={onPay}
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "1rem",
-              }}
+              style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}
             >
               <div style={{ gridColumn: "1 / -1" }}>
                 <label className="text-secondary text-sm">{tr("fullName", "Full name")}</label>
@@ -258,15 +303,14 @@ export default function CheckoutClient() {
                 />
               </div>
 
-              {/* ✅ Email (optional) */}
+              {/* ✅ Email required */}
               <div style={{ gridColumn: "1 / -1" }}>
-                <label className="text-secondary text-sm">
-                  {tr("email", "Email")} ({tr("optional", "optional")})
-                </label>
+                <label className="text-secondary text-sm">{tr("email", "Email")}</label>
                 <input
                   type="email"
+                  required
                   className="input"
-                  value={shipping.email || ""}
+                  value={shipping.email}
                   onChange={(e) => setShipping({ ...shipping, email: e.target.value })}
                 />
               </div>
@@ -282,7 +326,6 @@ export default function CheckoutClient() {
                 />
               </div>
 
-              {/* address2 optional */}
               <div style={{ gridColumn: "1 / -1" }}>
                 <label className="text-secondary text-sm">
                   {tr("address2", "Address line 2")} ({tr("optional", "optional")})
@@ -317,7 +360,6 @@ export default function CheckoutClient() {
                 />
               </div>
 
-              {/* state optional */}
               <div style={{ gridColumn: "1 / -1" }}>
                 <label className="text-secondary text-sm">
                   {tr("state", "State / Province")} ({tr("optional", "optional")})
@@ -353,11 +395,8 @@ export default function CheckoutClient() {
                 />
               </div>
 
-              {/* ✅ Instagram optional */}
               <div style={{ gridColumn: "1 / -1" }}>
-                <label className="text-secondary text-sm">
-                  Instagram ({tr("optional", "optional")})
-                </label>
+                <label className="text-secondary text-sm">Instagram ({tr("optional", "optional")})</label>
                 <input
                   type="text"
                   className="input"
@@ -391,11 +430,7 @@ export default function CheckoutClient() {
               <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
                 <div className="input" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                   <CreditCard size={20} className="text-secondary" />
-                  <input
-                    type="text"
-                    placeholder="Card number"
-                    style={{ border: "none", width: "100%", outline: "none" }}
-                  />
+                  <input type="text" placeholder="Card number" style={{ border: "none", width: "100%", outline: "none" }} />
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
@@ -406,24 +441,15 @@ export default function CheckoutClient() {
             </div>
           </div>
 
-          {/* Right: Order Summary */}
+          {/* Right */}
           <div>
             <div className="card" style={{ position: "sticky", top: "100px" }}>
               <h3 style={{ fontSize: "1.25rem", fontWeight: 950, marginBottom: "1rem" }}>
                 {tr("orderSummary", "Order summary")}
               </h3>
 
-              <div
-                style={{
-                  display: "flex",
-                  gap: "0.5rem",
-                  overflowX: "auto",
-                  paddingBottom: "1rem",
-                  marginBottom: "1rem",
-                  borderBottom: "1px solid var(--border)",
-                }}
-              >
-                {items.map((item) => (
+              <div style={{ display: "flex", gap: "0.5rem", overflowX: "auto", paddingBottom: "1rem", marginBottom: "1rem", borderBottom: "1px solid var(--border)" }}>
+                {cart.map((item) => (
                   <div
                     key={item.id}
                     style={{
@@ -440,11 +466,7 @@ export default function CheckoutClient() {
                   >
                     {item.previewUrl || item.src ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={(item.previewUrl || item.src) as string}
-                        alt="tile"
-                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                      />
+                      <img src={(item.previewUrl || item.src) as string} alt="tile" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                     ) : (
                       <ImageIcon size={16} color="var(--text-tertiary)" />
                     )}
@@ -464,20 +486,16 @@ export default function CheckoutClient() {
                 <span style={{ color: "#10B981" }}>{tr("free", "Free")}</span>
               </div>
 
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  fontSize: "1.25rem",
-                  fontWeight: 950,
-                  borderTop: "1px solid var(--border)",
-                  paddingTop: "1rem",
-                  marginBottom: "1.5rem",
-                }}
-              >
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "1.25rem", fontWeight: 950, borderTop: "1px solid var(--border)", paddingTop: "1rem", marginBottom: "1.0rem" }}>
                 <span>{tr("total", "Total")}</span>
                 <span>฿{total}</span>
               </div>
+
+              {(isPaying || uploadLabel) && (
+                <div style={{ fontSize: "0.75rem", color: "var(--text-tertiary)", marginBottom: "0.75rem" }}>
+                  {uploadLabel || tr("processingPayment", "Processing…")}
+                </div>
+              )}
 
               <button
                 type="submit"

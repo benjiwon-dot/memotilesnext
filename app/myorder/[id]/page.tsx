@@ -7,15 +7,21 @@ import { useApp } from "@/context/AppContext";
 import { getOrders } from "@/utils/orders";
 import {
   ArrowLeft,
+  CreditCard,
+  Printer,
+  Package,
+  Truck,
+  CheckCircle2,
   AlertCircle,
   MapPin,
-  ChevronRight,
-  X,
-  Mail,
+  Clock,
+  ShieldCheck,
+  MessageCircle,
 } from "lucide-react";
 
 type OrderStatus =
   | "paid"
+  | "processing"
   | "printing"
   | "printed"
   | "shipping"
@@ -25,8 +31,8 @@ type OrderStatus =
 
 type OrderItem = {
   id: string;
-  previewUrl?: string;
-  src?: string;
+  previewUrl?: string | null;
+  src?: string | null;
   qty?: number;
 };
 
@@ -45,7 +51,7 @@ type Order = {
   id: string;
   createdAt?: string | number | Date;
   status?: string;
-  currency?: string; // "฿" or "THB"
+  currency?: string;
   total?: number;
   items?: OrderItem[];
   itemsCount?: number;
@@ -53,11 +59,15 @@ type Order = {
   shippingAddress?: ShippingAddress;
   trackingNumber?: string;
   shippingCarrier?: string;
+
+  ownerUid?: string;
 };
 
 function normalizeStatus(raw?: string): OrderStatus {
-  const v = (raw || "").toLowerCase();
+  const v = (raw || "").toLowerCase().trim();
   if (v === "paid") return "paid";
+  if (v === "processing") return "processing";
+  // 기존 UI에서 printing을 쓰던 흔적도 흡수
   if (v.includes("print") && v.includes("ing")) return "printing";
   if (v === "printed") return "printed";
   if (v.includes("ship")) return "shipping";
@@ -66,12 +76,11 @@ function normalizeStatus(raw?: string): OrderStatus {
   return "unknown";
 }
 
-function formatDate(d?: Order["createdAt"], language?: string) {
+function formatDate(d?: Order["createdAt"]) {
   if (!d) return "";
   const date = d instanceof Date ? d : new Date(d);
   if (Number.isNaN(date.getTime())) return "";
-  const locale = language === "TH" ? "th-TH" : "en-US";
-  return date.toLocaleDateString(locale, {
+  return date.toLocaleDateString(undefined, {
     year: "numeric",
     month: "short",
     day: "2-digit",
@@ -84,29 +93,74 @@ function formatMoney(total?: number, currency?: string) {
   if (c === "฿") return `฿${total.toFixed(0)}`;
   if (!c) return `${total.toFixed(2)}`;
   try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency: c }).format(total);
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: c,
+    }).format(total);
   } catch {
     return `${c}${total.toFixed(2)}`;
   }
 }
 
-function statusPill(status: OrderStatus) {
-  // “타임라인” 말고, 한 줄로 깔끔한 상태 배지
+function statusMeta(status: OrderStatus) {
   switch (status) {
     case "paid":
-      return { label: "Paid", bg: "#EFF6FF", bd: "#BFDBFE", color: "#1E40AF" };
+      return {
+        label: "Paid",
+        icon: CreditCard,
+        bg: "#EFF6FF",
+        border: "#BFDBFE",
+        color: "#1E40AF",
+      };
+    case "processing":
     case "printing":
-      return { label: "Printing", bg: "#F5F3FF", bd: "#DDD6FE", color: "#5B21B6" };
+      return {
+        label: status === "processing" ? "Processing" : "Printing",
+        icon: Printer,
+        bg: "#F5F3FF",
+        border: "#DDD6FE",
+        color: "#5B21B6",
+      };
     case "printed":
-      return { label: "Printed", bg: "#ECFDF5", bd: "#A7F3D0", color: "#065F46" };
+      return {
+        label: "Printed",
+        icon: Package,
+        bg: "#ECFDF5",
+        border: "#A7F3D0",
+        color: "#065F46",
+      };
     case "shipping":
-      return { label: "Shipping", bg: "#FFFBEB", bd: "#FDE68A", color: "#92400E" };
+      return {
+        label: "Shipping",
+        icon: Truck,
+        bg: "#FFFBEB",
+        border: "#FDE68A",
+        color: "#92400E",
+      };
     case "delivered":
-      return { label: "Delivered", bg: "#ECFDF5", bd: "#A7F3D0", color: "#065F46" };
+      return {
+        label: "Delivered",
+        icon: CheckCircle2,
+        bg: "#ECFDF5",
+        border: "#A7F3D0",
+        color: "#065F46",
+      };
     case "cancelled":
-      return { label: "Cancelled", bg: "#FEF2F2", bd: "#FECACA", color: "#991B1B" };
+      return {
+        label: "Cancelled",
+        icon: AlertCircle,
+        bg: "#FEF2F2",
+        border: "#FECACA",
+        color: "#991B1B",
+      };
     default:
-      return { label: "Processing", bg: "#F3F4F6", bd: "#E5E7EB", color: "#374151" };
+      return {
+        label: "Processing",
+        icon: Package,
+        bg: "#F3F4F6",
+        border: "#E5E7EB",
+        color: "#374151",
+      };
   }
 }
 
@@ -122,85 +176,125 @@ function getPreviewImages(order: Order) {
   return order.items
     .map((it) => it.previewUrl || it.src)
     .filter(Boolean)
-    .slice(0, 20) as string[];
+    .slice(0, 12) as string[];
 }
 
-function canRequestAddressChange(status: OrderStatus) {
-  // printed(인쇄 완료)부터는 변경 어려움
-  return status !== "printed" && status !== "shipping" && status !== "delivered" && status !== "cancelled";
+function buildStatusSteps(current: OrderStatus) {
+  const base = [
+    { key: "paid", label: "Paid" },
+    { key: "printing", label: "Printing" },
+    { key: "shipping", label: "Shipping" },
+    { key: "delivered", label: "Delivered" },
+  ] as const;
+
+  if (current === "cancelled") {
+    return base.map((s) => ({ ...s, state: s.key === "paid" ? "done" : "todo" })) as any;
+  }
+
+  // processing도 printing 단계로 취급
+  const currentMapped: OrderStatus = current === "processing" ? "printing" : current;
+
+  const order = ["paid", "printing", "shipping", "delivered"] as OrderStatus[];
+  const idx = order.indexOf(currentMapped);
+  return base.map((s, i) => {
+    if (idx === -1) return { ...s, state: i === 0 ? "active" : "todo" };
+    if (i < idx) return { ...s, state: "done" };
+    if (i === idx) return { ...s, state: "active" };
+    return { ...s, state: "todo" };
+  });
 }
 
-function buildAddressText(addr?: ShippingAddress) {
-  if (!addr) return "";
-  const lines = [
-    addr.fullName,
-    addr.phone,
-    addr.address1,
-    addr.address2,
-    [addr.city, addr.state, addr.postalCode].filter(Boolean).join(", "),
-    addr.country,
-  ].filter(Boolean);
-  return lines.join("\n");
+/**
+ * ✅ fallback: localStorage 전체를 훑어서 orderId를 찾는다.
+ * - uid 키가 꼬였거나, 예전 키(guest/base)로 저장된 주문도 찾을 수 있음
+ */
+function findOrderByScanningStorage(orderId: string): Order | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const keys = Object.keys(localStorage);
+    const targetKeys = keys.filter(
+      (k) => k === "memotiles_orders" || k.startsWith("memotiles_orders__")
+    );
+
+    for (const k of targetKeys) {
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list)) continue;
+      const found = list.find((o: any) => String(o?.id) === orderId);
+      if (found) return found as Order;
+    }
+  } catch {}
+
+  return null;
 }
 
 export default function MyOrderDetailPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
+  const app = useApp() as any;
+
   const id = decodeURIComponent(params?.id || "");
 
-  const app = useApp() as any;
-  const t = app?.t as ((key: string) => string) | undefined;
-
-  const tr = (key: string, fallback: string) => {
-    const v = t?.(key);
-    if (!v || v === key) return fallback;
-    return v;
-  };
-
   const [order, setOrder] = useState<Order | null>(null);
-  const [lightbox, setLightbox] = useState<{ open: boolean; src?: string }>({ open: false });
 
+  // ✅ my-orders와 같은 방식으로 auth 확정 후 로드
   useEffect(() => {
-    try {
-      const all = getOrders() as Order[];
-      const found = Array.isArray(all) ? all.find((o) => o.id === id) : null;
-      setOrder(found || null);
-    } catch {
-      setOrder(null);
+    if (app?.authLoading !== false) return;
+
+    // 로그인 안됐으면 my-orders처럼 로그인으로
+    if (!app?.user) {
+      router.replace(`/login?next=${encodeURIComponent(`/myorder/${encodeURIComponent(id)}`)}`);
+      return;
     }
-  }, [id]);
+
+    const uid = String(app.user.uid || "").trim();
+    if (!uid) return;
+
+    // 1) 정상 경로: uid scoped
+    try {
+      const all = getOrders(uid) as Order[];
+      const found = Array.isArray(all) ? all.find((o) => o.id === id) : null;
+      if (found) {
+        setOrder(found || null);
+        return;
+      }
+    } catch {}
+
+    // 2) fallback: storage scan
+    const scanned = findOrderByScanningStorage(id);
+    setOrder(scanned || null);
+  }, [app?.authLoading, app?.user, id, router]);
 
   const status = useMemo(() => normalizeStatus(order?.status), [order?.status]);
-  const pill = useMemo(() => statusPill(status), [status]);
+  const meta = useMemo(() => statusMeta(status), [status]);
+  const Icon = meta.icon;
 
   const previews = useMemo(() => (order ? getPreviewImages(order) : []), [order]);
   const itemsCount = useMemo(() => (order ? getItemsCount(order) : 0), [order]);
+  const steps = useMemo(() => buildStatusSteps(status), [status]);
 
   const goBack = () => router.push("/my-orders");
 
-  const canChange = canRequestAddressChange(status);
-  const supportEmail = "support@memotiles.com"; // ✅ 너희 실제 메일로 바꿔
-  const subject = encodeURIComponent(`[Address change] Order ${order?.id || ""}`);
-  const body = encodeURIComponent(
-    [
-      `Hello MEMOTILES Support,`,
-      ``,
-      `I would like to request an address change for my order.`,
-      ``,
-      `Order ID: ${order?.id || ""}`,
-      `Current status: ${pill.label}`,
-      ``,
-      `Current address on file:`,
-      buildAddressText(order?.shippingAddress) || "(not available)",
-      ``,
-      `New address:`,
-      `(Please write your new address here)`,
-      ``,
-      `Thanks.`,
-    ].join("\n")
-  );
-
-  const mailto = `mailto:${supportEmail}?subject=${subject}&body=${body}`;
+  // auth 확인 중이면 로딩
+  if (app?.authLoading !== false) {
+    return (
+      <AppLayout>
+        <div
+          style={{
+            minHeight: "calc(100vh - 64px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "#F9FAFB",
+          }}
+        >
+          <span style={{ color: "var(--text-tertiary)", fontWeight: 700 }}>Loading...</span>
+        </div>
+      </AppLayout>
+    );
+  }
 
   if (!order) {
     return (
@@ -211,21 +305,10 @@ export default function MyOrderDetailPage() {
               <button
                 onClick={goBack}
                 className="btn btn-text"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "0.55rem 0.8rem",
-                  borderRadius: 999,
-                  border: "1px solid var(--border)",
-                  background: "white",
-                  fontWeight: 900,
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "#F9FAFB")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
+                style={{ display: "flex", gap: 8, alignItems: "center" }}
               >
-                <ArrowLeft size={16} />
-                {tr("backToMyOrders", "Back to My Orders")}
+                <ArrowLeft size={18} />
+                Back to My Orders
               </button>
 
               <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center" }}>
@@ -245,16 +328,20 @@ export default function MyOrderDetailPage() {
                   <AlertCircle size={20} />
                 </div>
                 <div>
-                  <div style={{ fontSize: 18, fontWeight: 950 }}>{tr("orderNotFoundTitle", "Order not found")}</div>
+                  <div style={{ fontSize: 18, fontWeight: 950 }}>Order not found</div>
                   <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontWeight: 600, marginTop: 4 }}>
-                    {tr("orderNotFoundSubtitle", "This order may have been removed from your browser storage.")}
+                    This order may have been stored under a different browser key.
                   </div>
                 </div>
               </div>
 
+              <div style={{ marginTop: 16, fontSize: 12, color: "var(--text-tertiary)", fontWeight: 650 }}>
+                Debug tip: check localStorage keys starting with <b>memotiles_orders</b>.
+              </div>
+
               <div style={{ marginTop: 20 }}>
                 <button className="btn btn-primary" onClick={() => router.push("/editor")}>
-                  {tr("startNewOrder", "Start a new order")}
+                  Start a new order
                 </button>
               </div>
             </div>
@@ -268,7 +355,7 @@ export default function MyOrderDetailPage() {
     <AppLayout>
       <div style={{ backgroundColor: "#F9FAFB", minHeight: "calc(100vh - 64px)", padding: "2rem 0" }}>
         <div className="container" style={{ maxWidth: 980 }}>
-          {/* Header (예시처럼 심플) */}
+          {/* Top header */}
           <div
             className="card"
             style={{
@@ -279,199 +366,201 @@ export default function MyOrderDetailPage() {
               gap: "1rem",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
               <button
                 onClick={goBack}
                 className="btn btn-text"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "0.55rem 0.8rem",
-                  borderRadius: 999,
-                  border: "1px solid var(--border)",
-                  background: "white",
-                  fontWeight: 900,
-                  whiteSpace: "nowrap",
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "#F9FAFB")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
+                style={{ display: "flex", gap: 8, alignItems: "center" }}
               >
-                <ArrowLeft size={16} />
-                {tr("myOrdersTitle", "My Orders")}
+                <ArrowLeft size={18} />
+                My Orders
               </button>
 
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 12, color: "var(--text-tertiary)", fontWeight: 850 }}>
-                  {tr("orderLabel", "Order")}
-                </div>
+              <div style={{ width: 1, height: 28, background: "var(--border)" }} />
 
-                <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginTop: 4 }}>
-                  <div style={{ fontSize: 18, fontWeight: 950, overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {order.id}
-                  </div>
-                  <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontWeight: 700 }}>
-                    {formatDate(order.createdAt, app?.language)}
-                    {itemsCount ? ` · ${itemsCount} ${tr("tilesUnit", "tiles")}` : ""}
-                    {order.total != null ? ` · ${formatMoney(order.total, order.currency)}` : ""}
-                  </div>
-                </div>
+              <div>
+                <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontWeight: 800 }}>Order</div>
+                <div style={{ fontSize: 18, fontWeight: 950 }}>{order.id}</div>
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <span
                 style={{
                   fontSize: 12,
-                  fontWeight: 950,
+                  fontWeight: 900,
                   padding: "6px 12px",
                   borderRadius: 999,
-                  background: pill.bg,
-                  border: `1px solid ${pill.bd}`,
-                  color: pill.color,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {tr(
-                  status === "paid"
-                    ? "orderStatusPaid"
-                    : status === "printing"
-                    ? "orderStatusPrinting"
-                    : status === "printed"
-                    ? "orderStatusPrinted"
-                    : status === "shipping"
-                    ? "orderStatusShipping"
-                    : status === "delivered"
-                    ? "orderStatusDelivered"
-                    : status === "cancelled"
-                    ? "orderStatusCancelled"
-                    : "orderStatusProcessing",
-                  pill.label
-                )}
-              </span>
-
-              <button
-                className="btn btn-text"
-                onClick={() => router.push("/support")}
-                style={{
-                  fontWeight: 950,
-                  padding: "0.55rem 0.85rem",
-                  borderRadius: 999,
-                  border: "1px solid var(--border)",
-                  background: "white",
+                  background: meta.bg,
+                  border: `1px solid ${meta.border}`,
+                  color: meta.color,
                   display: "inline-flex",
                   alignItems: "center",
                   gap: 8,
-                  whiteSpace: "nowrap",
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "#F9FAFB")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
               >
-                {tr("support", "Support")}
-                <ChevronRight size={16} />
+                <Icon size={16} />
+                {meta.label}
+              </span>
+
+              <button className="btn btn-text" onClick={() => router.push("/support")} style={{ fontWeight: 950 }}>
+                Support
               </button>
             </div>
           </div>
 
-          {/* Main grid (예시처럼: 왼쪽 타일이 핵심) */}
+          {/* Main grid */}
           <div
             style={{
               marginTop: "0.75rem",
               display: "grid",
-              gridTemplateColumns: "1.35fr 0.95fr",
+              gridTemplateColumns: "1.4fr 0.9fr",
               gap: "0.75rem",
-              alignItems: "start",
             }}
           >
-            {/* LEFT: Your tiles 크게 */}
-            <div className="card" style={{ padding: "1.25rem" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 18, fontWeight: 950 }}>{tr("yourTilesTitle", "Your tiles")}</div>
-                  <div style={{ marginTop: 6, fontSize: 13, color: "var(--text-tertiary)", fontWeight: 650 }}>
-                    {itemsCount ? `${itemsCount} ${tr("tilesUnit", "tiles")}` : tr("tilePreviews", "Tile previews")}
+            {/* Left: status + photos */}
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              {/* Status timeline */}
+              <div className="card" style={{ padding: "1.25rem" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 950 }}>Delivery status</div>
+                    <div style={{ marginTop: 6, fontSize: 13, color: "var(--text-tertiary)", fontWeight: 650 }}>
+                      Updated from your latest order state.
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontWeight: 800 }}>
+                    {formatDate(order.createdAt)}
                   </div>
                 </div>
 
-                {order.total != null && (
-                  <div
-                    style={{
-                      fontSize: 14,
-                      fontWeight: 950,
-                      padding: "6px 10px",
-                      borderRadius: 999,
-                      border: "1px solid var(--border)",
-                      background: "white",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {formatMoney(order.total, order.currency)}
-                  </div>
-                )}
-              </div>
-
-              {previews.length === 0 ? (
-                <div
-                  style={{
-                    marginTop: 16,
-                    padding: "1.25rem",
-                    border: "1px solid var(--border)",
-                    borderRadius: 18,
-                    background: "white",
-                    color: "var(--text-tertiary)",
-                    fontWeight: 650,
-                    fontSize: 13,
-                  }}
-                >
-                  {tr("noPreviewImagesFound", "No preview images found.")}
-                </div>
-              ) : (
                 <div
                   style={{
                     marginTop: 16,
                     display: "grid",
-                    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                    gap: 12,
+                    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                    gap: 10,
                   }}
                 >
-                  {previews.map((src, idx) => (
-                    <button
-                      key={`${order.id}-img-${idx}`}
-                      type="button"
-                      onClick={() => setLightbox({ open: true, src })}
-                      style={{
-                        all: "unset",
-                        cursor: "pointer",
-                        borderRadius: 18,
-                        overflow: "hidden",
-                        border: "1px solid var(--border)",
-                        background: "#F3F4F6",
-                        aspectRatio: "1 / 1",
-                        position: "relative",
-                        transition: "transform 0.12s ease, box-shadow 0.12s ease",
-                      }}
-                      onMouseEnter={(e) => {
-                        (e.currentTarget as any).style.transform = "translateY(-1px)";
-                        (e.currentTarget as any).style.boxShadow = "0 14px 34px rgba(0,0,0,0.08)";
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as any).style.transform = "translateY(0)";
-                        (e.currentTarget as any).style.boxShadow = "";
-                      }}
-                      aria-label="Open tile preview"
-                    >
-                      <img
-                        src={src}
-                        alt="tile preview"
-                        style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                      />
-                    </button>
-                  ))}
+                  {steps.map((s: any) => {
+                    const state = s.state as "done" | "active" | "todo";
+                    const bg = state === "done" ? "#ECFDF5" : state === "active" ? "#EFF6FF" : "#F3F4F6";
+                    const bd = state === "done" ? "#A7F3D0" : state === "active" ? "#BFDBFE" : "#E5E7EB";
+                    const color = state === "done" ? "#065F46" : state === "active" ? "#1E40AF" : "#374151";
+                    return (
+                      <div
+                        key={s.key}
+                        style={{
+                          padding: "0.9rem",
+                          borderRadius: 16,
+                          border: `1px solid ${bd}`,
+                          background: bg,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 10,
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 950, color }}>{s.label}</div>
+                          <div
+                            style={{
+                              fontSize: 12,
+                              marginTop: 4,
+                              color: "rgba(0,0,0,0.45)",
+                              fontWeight: 700,
+                            }}
+                          >
+                            {state === "done" ? "Done" : state === "active" ? "In progress" : "Next"}
+                          </div>
+                        </div>
+                        <div
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: 10,
+                            border: `1px solid ${bd}`,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            color,
+                            background: "rgba(255,255,255,0.7)",
+                            flex: "0 0 auto",
+                          }}
+                        >
+                          {state === "done" ? <CheckCircle2 size={16} /> : <Package size={16} />}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              )}
+
+                <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <InfoPill icon={Clock} text="Typical delivery: within ~5 days" />
+                  <InfoPill icon={ShieldCheck} text="Re-stickable tiles · wall-safe adhesive" />
+                </div>
+              </div>
+
+              {/* Photos */}
+              <div className="card" style={{ padding: "1.25rem" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 950 }}>Your tiles</div>
+                    <div style={{ marginTop: 6, fontSize: 13, color: "var(--text-tertiary)", fontWeight: 650 }}>
+                      {itemsCount ? `${itemsCount} tiles` : "Tile previews"}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 950 }}>
+                    {order.total != null ? formatMoney(order.total, order.currency) : ""}
+                  </div>
+                </div>
+
+                {previews.length === 0 ? (
+                  <div
+                    style={{
+                      marginTop: 16,
+                      padding: "1.25rem",
+                      border: "1px solid var(--border)",
+                      borderRadius: 16,
+                      background: "white",
+                    }}
+                  >
+                    <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontWeight: 650 }}>
+                      No preview images found.
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      marginTop: 16,
+                      display: "grid",
+                      gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                      gap: 10,
+                    }}
+                  >
+                    {previews.map((src, idx) => (
+                      <div
+                        key={`${order.id}-img-${idx}`}
+                        style={{
+                          width: "100%",
+                          aspectRatio: "1 / 1",
+                          borderRadius: 16,
+                          overflow: "hidden",
+                          border: "1px solid var(--border)",
+                          background: "#F3F4F6",
+                        }}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={src} alt="tile preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* RIGHT: Shipping + Summary (예시처럼 깔끔) */}
+            {/* Right: address + summary + help */}
             <div style={{ display: "grid", gap: "0.75rem" }}>
               {/* Shipping */}
               <div className="card" style={{ padding: "1.25rem" }}>
@@ -492,9 +581,9 @@ export default function MyOrderDetailPage() {
                     <MapPin size={18} />
                   </div>
                   <div>
-                    <div style={{ fontSize: 16, fontWeight: 950 }}>{tr("shippingSectionTitle", "Delivery address")}</div>
+                    <div style={{ fontSize: 16, fontWeight: 950 }}>Shipping</div>
                     <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-tertiary)", fontWeight: 650 }}>
-                      {tr("shippingSectionSubtitle", "Where your tiles will be delivered")}
+                      Where your tiles will be delivered
                     </div>
                   </div>
                 </div>
@@ -503,59 +592,10 @@ export default function MyOrderDetailPage() {
                   <AddressBlock addr={order.shippingAddress} />
                 </div>
 
-                {/* ✅ 버튼은 여기 딱 1개만 */}
-                <div style={{ marginTop: 14 }}>
-                  {canChange ? (
-                    <a
-                      href={mailto}
-                      className="btn btn-text"
-                      style={{
-                        width: "100%",
-                        fontWeight: 950,
-                        padding: "0.8rem 0.9rem",
-                        borderRadius: 14,
-                        border: "1px solid var(--border)",
-                        background: "white",
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: 10,
-                        textDecoration: "none",
-                      }}
-                      onMouseEnter={(e) => ((e.currentTarget as any).style.background = "#F9FAFB")}
-                      onMouseLeave={(e) => ((e.currentTarget as any).style.background = "white")}
-                    >
-                      <Mail size={18} />
-                      {tr("requestAddressChange", "Request address change")}
-                    </a>
-                  ) : (
-                    <div
-                      style={{
-                        marginTop: 2,
-                        padding: "0.85rem 0.95rem",
-                        borderRadius: 14,
-                        border: "1px solid var(--border)",
-                        background: "#F9FAFB",
-                        color: "var(--text-tertiary)",
-                        fontWeight: 700,
-                        fontSize: 13,
-                        lineHeight: 1.45,
-                      }}
-                    >
-                      {tr(
-                        "addressChangeNotAvailable",
-                        "Address changes are usually not possible after printing starts."
-                      )}
-                    </div>
-                  )}
-                </div>
-
                 {(order.trackingNumber || order.shippingCarrier) && (
                   <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
-                    <div style={{ fontSize: 12, fontWeight: 900, color: "var(--text-tertiary)" }}>
-                      {tr("trackingLabel", "Tracking")}
-                    </div>
-                    <div style={{ marginTop: 6, fontSize: 13, fontWeight: 850 }}>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: "var(--text-tertiary)" }}>Tracking</div>
+                    <div style={{ marginTop: 6, fontSize: 13, fontWeight: 800 }}>
                       {order.shippingCarrier ? `${order.shippingCarrier} · ` : ""}
                       {order.trackingNumber || "-"}
                     </div>
@@ -563,150 +603,63 @@ export default function MyOrderDetailPage() {
                 )}
               </div>
 
-              {/* Summary */}
+              {/* Order summary */}
               <div className="card" style={{ padding: "1.25rem" }}>
-                <div style={{ fontSize: 16, fontWeight: 950 }}>{tr("orderSummaryTitle", "Order summary")}</div>
+                <div style={{ fontSize: 16, fontWeight: 950 }}>Order summary</div>
 
                 <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-                  <KeyValue
-                    label={tr("orderDateLabel", "Order date")}
-                    value={formatDate(order.createdAt, app?.language) || "-"}
-                  />
-                  <KeyValue
-                    label={tr("itemsLabel", "Items")}
-                    value={itemsCount ? `${itemsCount} ${tr("tilesUnit", "tiles")}` : "-"}
-                  />
-                  <KeyValue
-                    label={tr("statusLabel", "Status")}
-                    value={tr(
-                      status === "paid"
-                        ? "orderStatusPaid"
-                        : status === "printing"
-                        ? "orderStatusPrinting"
-                        : status === "printed"
-                        ? "orderStatusPrinted"
-                        : status === "shipping"
-                        ? "orderStatusShipping"
-                        : status === "delivered"
-                        ? "orderStatusDelivered"
-                        : status === "cancelled"
-                        ? "orderStatusCancelled"
-                        : "orderStatusProcessing",
-                      pill.label
-                    )}
-                    pill={pill}
-                  />
-                  <KeyValue
-                    label={tr("totalLabel", "Total")}
-                    value={order.total != null ? formatMoney(order.total, order.currency) : "-"}
-                  />
+                  <KeyValue label="Order date" value={formatDate(order.createdAt) || "-"} />
+                  <KeyValue label="Items" value={itemsCount ? `${itemsCount} tiles` : "-"} />
+                  <KeyValue label="Status" value={meta.label} pill={{ bg: meta.bg, bd: meta.border, color: meta.color }} />
+                  <KeyValue label="Total" value={order.total != null ? formatMoney(order.total, order.currency) : "-"} />
                 </div>
 
                 <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
-                  <div style={{ fontSize: 12, fontWeight: 900, color: "var(--text-tertiary)" }}>
-                    {tr("needHelpTitle", "Need help?")}
+                  <div style={{ fontSize: 12, fontWeight: 900, color: "var(--text-tertiary)" }}>Good to know</div>
+                  <ul
+                    style={{
+                      marginTop: 10,
+                      paddingLeft: 18,
+                      color: "var(--text-tertiary)",
+                      fontWeight: 650,
+                      lineHeight: 1.7,
+                    }}
+                  >
+                    <li>Once printing starts, changes may not be possible.</li>
+                    <li>If your tiles fall off, contact support — we’ll help.</li>
+                    <li>Keep your order ID for faster support.</li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Help */}
+              <div className="card" style={{ padding: "1.25rem" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 950 }}>Need help?</div>
+                    <div style={{ marginTop: 6, fontSize: 12, color: "var(--text-tertiary)", fontWeight: 650 }}>
+                      Contact support with your order ID.
+                    </div>
                   </div>
 
-                  <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => router.push("/contact")}
-                      style={{ width: "100%" }}
-                    >
-                      {tr("contactUs", "Contact us")}
-                    </button>
+                  <MessageCircle size={18} color="var(--text-tertiary)" />
+                </div>
 
-                    <button
-                      className="btn btn-text"
-                      onClick={() => router.push("/support")}
-                      style={{
-                        width: "100%",
-                        fontWeight: 950,
-                        padding: "0.75rem 0.9rem",
-                        borderRadius: 14,
-                        border: "1px solid var(--border)",
-                        background: "white",
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "#F9FAFB")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
-                    >
-                      {tr("viewFaq", "View FAQ")}
-                    </button>
-                  </div>
+                <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+                  <button className="btn btn-primary" onClick={() => router.push("/contact")} style={{ width: "100%" }}>
+                    Contact us
+                  </button>
+                  <button className="btn btn-text" onClick={() => router.push("/support")} style={{ width: "100%", fontWeight: 950 }}>
+                    View FAQ
+                  </button>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Lightbox */}
-          {lightbox.open && (
-            <div
-              role="dialog"
-              aria-modal="true"
-              onClick={() => setLightbox({ open: false })}
-              style={{
-                position: "fixed",
-                inset: 0,
-                background: "rgba(0,0,0,0.55)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: 16,
-                zIndex: 99999,
-              }}
-            >
-              <div
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  width: "min(860px, 96vw)",
-                  background: "white",
-                  borderRadius: 18,
-                  overflow: "hidden",
-                  border: "1px solid rgba(255,255,255,0.25)",
-                  boxShadow: "0 24px 80px rgba(0,0,0,0.35)",
-                }}
-              >
-                <div
-                  style={{
-                    padding: "10px 12px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    borderBottom: "1px solid #E5E7EB",
-                  }}
-                >
-                  <div style={{ fontWeight: 900, fontSize: 13, color: "#111827" }}>
-                    {tr("preview", "Preview")}
-                  </div>
-                  <button
-                    className="btn btn-text"
-                    onClick={() => setLightbox({ open: false })}
-                    style={{
-                      padding: "0.45rem 0.6rem",
-                      borderRadius: 12,
-                      border: "1px solid var(--border)",
-                      background: "white",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 8,
-                      fontWeight: 900,
-                    }}
-                  >
-                    <X size={16} />
-                    {tr("close", "Close")}
-                  </button>
-                </div>
-
-                <div style={{ background: "#0B0F19" }}>
-                  <img
-                    src={lightbox.src}
-                    alt="preview"
-                    style={{ width: "100%", height: "auto", display: "block" }}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
+          <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-tertiary)", fontWeight: 650 }}>
+            Tip: For true admin sync, connect orders to Firestore and fetch by order ID here.
+          </div>
         </div>
       </div>
     </AppLayout>
@@ -715,6 +668,28 @@ export default function MyOrderDetailPage() {
 
 /* --------- small UI helpers --------- */
 
+function InfoPill({ icon: Icon, text }: { icon: any; text: string }) {
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 12px",
+        borderRadius: 999,
+        border: "1px solid var(--border)",
+        background: "white",
+        fontSize: 12,
+        fontWeight: 800,
+        color: "var(--text-tertiary)",
+      }}
+    >
+      <Icon size={14} />
+      {text}
+    </div>
+  );
+}
+
 function KeyValue({
   label,
   value,
@@ -722,7 +697,7 @@ function KeyValue({
 }: {
   label: string;
   value: string;
-  pill?: { bg: string; bd: string; color: string; label: string };
+  pill?: { bg: string; bd: string; color: string };
 }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
@@ -737,34 +712,24 @@ function KeyValue({
             background: pill.bg,
             border: `1px solid ${pill.bd}`,
             color: pill.color,
-            whiteSpace: "nowrap",
           }}
         >
           {value}
         </span>
       ) : (
-        <div style={{ fontSize: 13, fontWeight: 900, whiteSpace: "nowrap" }}>{value}</div>
+        <div style={{ fontSize: 13, fontWeight: 900 }}>{value}</div>
       )}
     </div>
   );
 }
 
 function AddressBlock({ addr }: { addr?: ShippingAddress }) {
-  const app = useApp() as any;
-  const t = app?.t as ((key: string) => string) | undefined;
-
-  const tr = (key: string, fallback: string) => {
-    const v = t?.(key);
-    if (!v || v === key) return fallback;
-    return v;
-  };
-
   if (!addr) {
     return (
       <div
         style={{
           padding: "1rem",
-          borderRadius: 18,
+          borderRadius: 16,
           border: "1px solid var(--border)",
           background: "white",
           color: "var(--text-tertiary)",
@@ -773,7 +738,9 @@ function AddressBlock({ addr }: { addr?: ShippingAddress }) {
           fontSize: 13,
         }}
       >
-        {tr("shippingAddressNotAvailable", "Shipping address is not available yet.")}
+        Shipping address is not available yet.
+        <br />
+        (Add it during checkout and save into the order object.)
       </div>
     );
   }
@@ -791,10 +758,10 @@ function AddressBlock({ addr }: { addr?: ShippingAddress }) {
     <div
       style={{
         padding: "1rem",
-        borderRadius: 18,
+        borderRadius: 16,
         border: "1px solid var(--border)",
         background: "white",
-        fontWeight: 750,
+        fontWeight: 700,
         lineHeight: 1.7,
         fontSize: 13,
       }}

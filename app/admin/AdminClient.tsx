@@ -68,6 +68,14 @@ function safeStr(v: any) {
   return typeof v === "string" ? v : "";
 }
 
+function sanitizePart(input: string) {
+  return (input || "")
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
+}
+
 // ✅ 주문의 고객/주소 정보를 “신형/구형/다른키” 모두 지원
 function getCustomer(order: AnyOrder) {
   const userName =
@@ -85,16 +93,26 @@ function getCustomer(order: AnyOrder) {
   const legacy = order?.shipping || {};
   const addr = order?.shippingAddress || {};
 
-  const name = safeStr(userName) || safeStr(legacy?.name) || safeStr(addr?.fullName) || "";
-  const email = safeStr(userEmail) || safeStr(legacy?.email) || safeStr(addr?.email) || "";
+  const name =
+    safeStr(userName) ||
+    safeStr(legacy?.name) ||
+    safeStr(addr?.fullName) ||
+    "";
+  const email =
+    safeStr(userEmail) ||
+    safeStr(legacy?.email) ||
+    safeStr(addr?.email) ||
+    "";
   const phone = safeStr(legacy?.phone) || safeStr(addr?.phone) || "";
-  const instagram = safeStr(legacy?.instagram) || safeStr(addr?.instagram) || "";
+  const instagram =
+    safeStr(legacy?.instagram) || safeStr(addr?.instagram) || "";
 
   const address1 = safeStr(legacy?.address) || safeStr(addr?.address1) || "";
   const address2 = safeStr(addr?.address2) || safeStr(legacy?.address2) || "";
   const city = safeStr(legacy?.city) || safeStr(addr?.city) || "";
   const state = safeStr(legacy?.state) || safeStr(addr?.state) || "";
-  const postalCode = safeStr(legacy?.postalCode) || safeStr(addr?.postalCode) || "";
+  const postalCode =
+    safeStr(legacy?.postalCode) || safeStr(addr?.postalCode) || "";
   const country = safeStr(legacy?.country) || safeStr(addr?.country) || "";
 
   return {
@@ -115,7 +133,10 @@ function getTileCount(order: AnyOrder) {
   if (typeof order?.qty === "number") return order.qty;
   if (typeof order?.itemsCount === "number") return order.itemsCount;
   if (Array.isArray(order?.items) && order.items.length) {
-    return order.items.reduce((sum: number, it: any) => sum + (Number(it?.qty) || 1), 0);
+    return order.items.reduce(
+      (sum: number, it: any) => sum + (Number(it?.qty) || 1),
+      0
+    );
   }
   return 0;
 }
@@ -132,6 +153,42 @@ function downloadUrl(url: string, filename: string) {
   document.body.appendChild(a);
   a.click();
   a.remove();
+}
+
+function isoDateOnly(isoString: string) {
+  try {
+    return new Date(isoString).toISOString().split("T")[0];
+  } catch {
+    return "";
+  }
+}
+
+async function downloadZipFromServer(payload: {
+  folderName: string;
+  files: { url: string; name: string }[];
+}) {
+  const res = await fetch("/api/admin/photos-zip", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`ZIP download failed (${res.status}). ${text}`);
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${payload.folderName}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  URL.revokeObjectURL(url);
 }
 
 export default function AdminClient() {
@@ -159,6 +216,9 @@ export default function AdminClient() {
   // Selection Mode State (Photos)
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(new Set());
+
+  // ✅ ZIP 다운로드 로딩/에러
+  const [isZipping, setIsZipping] = useState(false);
 
   const refreshOrders = () => setOrders(getOrders());
 
@@ -297,7 +357,11 @@ export default function AdminClient() {
 
   const handleBulkStatusApply = () => {
     if (!bulkStatus || selectedIds.length === 0) return;
-    if (window.confirm(`Change status of ${selectedIds.length} orders to ${bulkStatus.toUpperCase()}?`)) {
+    if (
+      window.confirm(
+        `Change status of ${selectedIds.length} orders to ${bulkStatus.toUpperCase()}?`
+      )
+    ) {
       selectedIds.forEach((id) => updateOrderStatus(id, bulkStatus as any));
       refreshOrders();
       setSelectedIds([]);
@@ -306,7 +370,9 @@ export default function AdminClient() {
   };
 
   const toggleOrderSelection = (id: string) => {
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]));
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
   };
 
   const handleSelectAllVisible = (checked: boolean) => {
@@ -337,9 +403,9 @@ export default function AdminClient() {
     });
   };
 
+  // ✅ 기존 “개별 파일” 다운로드(유지)
   const handleDownloadAll = () => {
     if (!items?.length) return;
-    // ✅ 순차 다운로드 (zip은 나중에 서버/라이브러리 붙일 때)
     items.forEach((p: any, idx: number) => {
       const url = getPhotoUrl(p);
       if (!url) return;
@@ -363,6 +429,83 @@ export default function AdminClient() {
     });
   };
 
+  // ✅ ZIP 다운로드: 폴더명(고객명_날짜_오더ID) 안에 01.jpg~ 로 저장
+  const buildFolderName = () => {
+    const cName = sanitizePart(customer?.name?.trim() ? customer!.name : "Unknown");
+    const date = sanitizePart(selectedOrder?.createdAt ? isoDateOnly(selectedOrder.createdAt) : "");
+    const oid = sanitizePart(selectedOrder?.id || "ORDER");
+    return `${cName}_${date}_${oid}`.replace(/_+/g, "_").replace(/^_+|_+$/g, "");
+  };
+
+  const handleDownloadZipAll = async () => {
+    if (!selectedOrder || !items?.length) return;
+
+    const folderName = buildFolderName();
+
+    const files = items
+      .map((p: any, idx: number) => {
+        const url = getPhotoUrl(p);
+        if (!url) return null;
+        const extGuess =
+          (url.split("?")[0].toLowerCase().endsWith(".png") && "png") ||
+          (url.split("?")[0].toLowerCase().endsWith(".webp") && "webp") ||
+          (url.split("?")[0].toLowerCase().endsWith(".jpeg") && "jpg") ||
+          (url.split("?")[0].toLowerCase().endsWith(".jpg") && "jpg") ||
+          "jpg";
+        const fileName = `${String(idx + 1).padStart(2, "0")}.${extGuess}`;
+        return { url, name: fileName };
+      })
+      .filter(Boolean) as { url: string; name: string }[];
+
+    try {
+      setIsZipping(true);
+      await downloadZipFromServer({ folderName, files });
+    } catch (e: any) {
+      alert(e?.message || "ZIP download failed");
+    } finally {
+      setIsZipping(false);
+    }
+  };
+
+  const handleDownloadZipSelected = async () => {
+    if (!selectedOrder || !items?.length) return;
+    if (selectedPhotoIds.size === 0) return;
+
+    const folderName = buildFolderName();
+
+    const selectedList = items
+      .map((p: any, idx: number) => ({ p, idx }))
+      .filter(({ p, idx }) => {
+        const pid = p?.id || `photo-${idx}`;
+        return selectedPhotoIds.has(pid);
+      });
+
+    const files = selectedList
+      .map(({ p, idx }, localIdx) => {
+        const url = getPhotoUrl(p);
+        if (!url) return null;
+        const extGuess =
+          (url.split("?")[0].toLowerCase().endsWith(".png") && "png") ||
+          (url.split("?")[0].toLowerCase().endsWith(".webp") && "webp") ||
+          (url.split("?")[0].toLowerCase().endsWith(".jpeg") && "jpg") ||
+          (url.split("?")[0].toLowerCase().endsWith(".jpg") && "jpg") ||
+          "jpg";
+        // 선택 다운로드도 01,02...로 깔끔하게
+        const fileName = `${String(localIdx + 1).padStart(2, "0")}.${extGuess}`;
+        return { url, name: fileName };
+      })
+      .filter(Boolean) as { url: string; name: string }[];
+
+    try {
+      setIsZipping(true);
+      await downloadZipFromServer({ folderName, files });
+    } catch (e: any) {
+      alert(e?.message || "ZIP download failed");
+    } finally {
+      setIsZipping(false);
+    }
+  };
+
   const fullAddress = useMemo(() => {
     if (!customer) return "";
     const parts = [
@@ -378,23 +521,64 @@ export default function AdminClient() {
 
   return (
     <AppLayout showFooter={false}>
-      <div style={{ display: "flex", flexDirection: "column", height: "100vh", backgroundColor: "#F9FAFB", fontFamily: "Inter, system-ui, sans-serif" }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          height: "100vh",
+          backgroundColor: "#F9FAFB",
+          fontFamily: "Inter, system-ui, sans-serif",
+        }}
+      >
         <style>{`
           .no-scrollbar::-webkit-scrollbar { display: none; }
           .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
         `}</style>
 
         {/* Header */}
-        <header style={{ height: 64, backgroundColor: "white", borderBottom: "1px solid #E5E7EB", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 2rem", flexShrink: 0 }}>
+        <header
+          style={{
+            height: 64,
+            backgroundColor: "white",
+            borderBottom: "1px solid #E5E7EB",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "0 2rem",
+            flexShrink: 0,
+          }}
+        >
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-            <div style={{ backgroundColor: "#111827", width: 32, height: 32, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div
+              style={{
+                backgroundColor: "#111827",
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
               <span style={{ color: "white", fontWeight: "bold" }}>M</span>
             </div>
-            <h2 style={{ fontSize: "1.25rem", fontWeight: "bold", color: "#111827" }}>Admin Dashboard</h2>
+            <h2 style={{ fontSize: "1.25rem", fontWeight: "bold", color: "#111827" }}>
+              Admin Dashboard
+            </h2>
           </div>
           <button
             onClick={() => alert("Export is a placeholder for now.")}
-            style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 1rem", borderRadius: 8, border: "1px solid #E5E7EB", backgroundColor: "white", fontSize: "0.875rem", fontWeight: 600 }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              padding: "0.5rem 1rem",
+              borderRadius: 8,
+              border: "1px solid #E5E7EB",
+              backgroundColor: "white",
+              fontSize: "0.875rem",
+              fontWeight: 600,
+            }}
           >
             <Download size={16} />
             Export
@@ -403,9 +587,28 @@ export default function AdminClient() {
 
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
           {/* LEFT */}
-          <div style={{ width: 420, borderRight: "1px solid #E5E7EB", display: "flex", flexDirection: "column", backgroundColor: "white", flexShrink: 0 }}>
+          <div
+            style={{
+              width: 420,
+              borderRight: "1px solid #E5E7EB",
+              display: "flex",
+              flexDirection: "column",
+              backgroundColor: "white",
+              flexShrink: 0,
+            }}
+          >
             {/* Tabs */}
-            <div className="no-scrollbar" style={{ display: "flex", padding: "1rem", gap: "0.5rem", borderBottom: "1px solid #E5E7EB", overflowX: "auto", whiteSpace: "nowrap" }}>
+            <div
+              className="no-scrollbar"
+              style={{
+                display: "flex",
+                padding: "1rem",
+                gap: "0.5rem",
+                borderBottom: "1px solid #E5E7EB",
+                overflowX: "auto",
+                whiteSpace: "nowrap",
+              }}
+            >
               {TABS.map((tab) => (
                 <button
                   key={tab.id}
@@ -428,8 +631,22 @@ export default function AdminClient() {
             </div>
 
             {/* Summary + Date */}
-            <div style={{ padding: "1rem", backgroundColor: "#F9FAFB", borderBottom: "1px solid #E5E7EB" }}>
-              <div style={{ fontSize: "0.875rem", color: "#6B7280", fontWeight: 600, marginBottom: "1rem", padding: "0 0.5rem" }}>
+            <div
+              style={{
+                padding: "1rem",
+                backgroundColor: "#F9FAFB",
+                borderBottom: "1px solid #E5E7EB",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "0.875rem",
+                  color: "#6B7280",
+                  fontWeight: 600,
+                  marginBottom: "1rem",
+                  padding: "0 0.5rem",
+                }}
+              >
                 Orders: <span style={{ color: "#111827" }}>{summary.orderCount}</span> · Tiles:{" "}
                 <span style={{ color: "#111827" }}>{summary.tileCount}</span>
               </div>
@@ -744,6 +961,11 @@ export default function AdminClient() {
                       <span style={{ backgroundColor: "#F3F4F6", padding: "0.25rem 0.75rem", borderRadius: 999, fontSize: "0.75rem", fontWeight: 600, color: "#4B5563" }}>
                         {items.length} files
                       </span>
+                      {isZipping && (
+                        <span style={{ fontSize: "0.75rem", color: "#2563EB", fontWeight: 700 }}>
+                          Zipping...
+                        </span>
+                      )}
                     </div>
 
                     <div style={{ display: "flex", gap: "0.75rem" }}>
@@ -767,6 +989,34 @@ export default function AdminClient() {
                         {isSelectMode ? "Cancel Selection" : "Select"}
                       </button>
 
+                      {/* ✅ NEW: ZIP 버튼 */}
+                      <button
+                        onClick={() => {
+                          if (selectedPhotoIds.size > 0) handleDownloadZipSelected();
+                          else handleDownloadZipAll();
+                        }}
+                        disabled={isZipping || items.length === 0}
+                        style={{
+                          padding: "0.5rem 1rem",
+                          fontSize: "0.875rem",
+                          borderRadius: 6,
+                          border: "1px solid #E5E7EB",
+                          backgroundColor: isZipping ? "#F3F4F6" : "white",
+                          cursor: isZipping ? "not-allowed" : "pointer",
+                          fontWeight: 700,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                        }}
+                        title="Download as a ZIP folder named (Customer_Date_OrderID)"
+                      >
+                        <Download size={16} />
+                        {selectedPhotoIds.size > 0
+                          ? `Download ZIP (${selectedPhotoIds.size})`
+                          : "Download ZIP (All)"}
+                      </button>
+
+                      {/* (옵션) 기존 개별 다운로드 유지하고 싶으면 버튼 하나 더 두기 */}
                       <button
                         onClick={() => {
                           if (selectedPhotoIds.size > 0) handleDownloadSelected();
@@ -784,9 +1034,10 @@ export default function AdminClient() {
                           alignItems: "center",
                           gap: "0.5rem",
                         }}
+                        title="Download files individually (not zipped)"
                       >
                         <Download size={16} />
-                        {selectedPhotoIds.size > 0 ? `Download Selected (${selectedPhotoIds.size})` : "Download All"}
+                        Individual
                       </button>
                     </div>
                   </div>

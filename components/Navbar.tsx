@@ -1,23 +1,45 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
-import { useApp } from "../context/AppContext";
+import { useApp } from "@/context/AppContext";
 import { ChevronDown } from "lucide-react";
 
-export default function Navbar({ variant = "marketing" }) {
-  const { isLoggedIn, logout, language, setLanguage, t } = useApp();
+export default function Navbar({ variant = "marketing" }: { variant?: "marketing" | "app" }) {
+  const { user, authLoading, logout, language, setLanguage, t } = useApp() as any;
+
+  const tr = (key: string, fallback: string) => {
+    const v = t?.(key);
+    if (!v || v === key) return fallback;
+    return v;
+  };
+
   const router = useRouter();
   const pathname = usePathname();
   const [langOpen, setLangOpen] = useState(false);
 
-  const handleLogout = () => {
-    logout();
-    router.push("/");
-  };
-
   const isApp = variant === "app";
+  const isLoggedIn = !!user;
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest?.("[data-lang-menu]")) setLangOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.push("/");
+    } catch (e) {
+      console.error(e);
+      router.push("/");
+    }
+  };
 
   return (
     <nav
@@ -61,10 +83,10 @@ export default function Navbar({ variant = "marketing" }) {
           {!isApp && (
             <div className="hide-mobile" style={{ display: "flex", gap: "1.5rem" }}>
               <Link href="/about" className="btn-text" style={{ fontSize: "0.875rem", fontWeight: "600" }}>
-                {t("about")}
+                {tr("aboutUs", "About us")}
               </Link>
               <Link href="/support" className="btn-text" style={{ fontSize: "0.875rem", fontWeight: "600" }}>
-                {t("support")}
+                {tr("support", "Support")}
               </Link>
             </div>
           )}
@@ -73,9 +95,9 @@ export default function Navbar({ variant = "marketing" }) {
         {/* RIGHT */}
         <div style={{ display: "flex", alignItems: "center", gap: "1.5rem" }}>
           {/* Language */}
-          <div style={{ position: "relative" }}>
+          <div style={{ position: "relative" }} data-lang-menu>
             <button
-              onClick={() => setLangOpen(!langOpen)}
+              onClick={() => setLangOpen((v) => !v)}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -101,21 +123,22 @@ export default function Navbar({ variant = "marketing" }) {
                   border: "1px solid var(--border)",
                   borderRadius: "var(--radius-md)",
                   boxShadow: "var(--shadow-md)",
-                  minWidth: "100px",
+                  minWidth: "120px",
                   zIndex: 1100,
+                  overflow: "hidden",
                 }}
               >
-                {["EN", "TH"].map((lang) => (
+                {(["EN", "TH"] as const).map((lang) => (
                   <button
                     key={lang}
                     onClick={() => {
-                      setLanguage(lang);
+                      setLanguage(lang as any);
                       setLangOpen(false);
                     }}
                     style={{
                       display: "block",
                       width: "100%",
-                      padding: "0.5rem 1rem",
+                      padding: "0.6rem 1rem",
                       fontSize: "0.875rem",
                       textAlign: "left",
                       background: language === lang ? "#f3f4f6" : "white",
@@ -130,23 +153,30 @@ export default function Navbar({ variant = "marketing" }) {
             )}
           </div>
 
-          {isLoggedIn ? (
+          {/* Auth area */}
+          {authLoading ? (
+            <div style={{ width: 110, height: 36, borderRadius: 12, background: "rgba(0,0,0,0.06)" }} />
+          ) : isLoggedIn ? (
             <>
               <Link href="/my-orders" className="btn-text" style={{ fontSize: "0.875rem", fontWeight: "600" }}>
-                {t("myOrders")}
+                {tr("myOrders", "My Orders")}
               </Link>
               <button
                 onClick={handleLogout}
                 className="btn-text"
                 style={{ fontSize: "0.875rem", fontWeight: "600", cursor: "pointer" }}
               >
-                {t("signOut")}
+                {tr("signOut", "Sign out")}
               </button>
             </>
           ) : (
             pathname !== "/login" && (
-              <Link href="/login" className="btn btn-primary" style={{ padding: "0.5rem 1.25rem", fontSize: "0.875rem" }}>
-                {t("signIn")}
+              <Link
+                href="/login"
+                className="btn btn-primary"
+                style={{ padding: "0.5rem 1.25rem", fontSize: "0.875rem" }}
+              >
+                {tr("login", "Log in")}
               </Link>
             )
           )}
