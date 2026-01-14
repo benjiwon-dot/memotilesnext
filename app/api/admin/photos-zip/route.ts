@@ -1,3 +1,5 @@
+// app/api/admin/photos-zip/route.ts  ✅ 통코드 (그대로 교체)
+
 import JSZip from "jszip";
 import { NextResponse } from "next/server";
 
@@ -75,7 +77,10 @@ export async function POST(req: Request) {
 
     const encoded = encodeURIComponent(zipFileName);
 
-    return new NextResponse(zipBuffer, {
+    // ✅ 핵심 수정: Buffer -> Uint8Array 로 변환해서 NextResponse 바디로 전달 (TS 빌드 통과)
+    const bodyBytes = new Uint8Array(zipBuffer);
+
+    return new NextResponse(bodyBytes, {
       headers: {
         "Content-Type": "application/zip",
         "Content-Disposition": `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`,
