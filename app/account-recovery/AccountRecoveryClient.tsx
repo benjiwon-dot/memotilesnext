@@ -1,13 +1,21 @@
+// app/account-recovery/AccountRecoveryClient.tsx  ✅ 통코드 (그대로 교체 OK)
 "use client";
 
 import React, { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/context/AppContext";
 
-export default function AccountRecoveryPage() {
+export default function AccountRecoveryClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { sendPasswordReset } = useApp() as any;
+  const { sendPasswordReset, t } = useApp() as any;
+
+  // ✅ 번역이 없으면 key 자체가 그대로 오는 경우 방지
+  const tt = (key: string, fallback: string) => {
+    const v = t?.(key);
+    if (!v || v === key) return fallback;
+    return v;
+  };
 
   const nextPath = useMemo(() => {
     const n = searchParams?.get("next");
@@ -41,7 +49,7 @@ export default function AccountRecoveryPage() {
 
       setSent(true);
     } catch (e: any) {
-      alert(e?.message || "Failed to send reset email.");
+      alert(e?.message || tt("recoverySendFailed", "Failed to send reset email."));
     } finally {
       setLoading(false);
     }
@@ -77,16 +85,16 @@ export default function AccountRecoveryPage() {
             color: "var(--text)",
           }}
         >
-          Find my email / password
+          {tt("recoveryTitle", "Account recovery")}
         </h1>
 
         <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: 14, lineHeight: 1.5 }}>
-          Enter your email address and we’ll send a password reset email.
+          {tt("recoveryDesc", "Enter your email address and we’ll send you a password reset link.")}
         </p>
 
         <div style={{ marginTop: 18 }}>
           <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>
-            Email address
+            {tt("recoveryEmailLabel", "Email address")}
           </label>
 
           <input
@@ -94,16 +102,14 @@ export default function AccountRecoveryPage() {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="Email address"
+            placeholder={tt("emailPlaceholder", "Email address")}
             autoComplete="email"
-            style={{
-              width: "100%",
-            }}
+            style={{ width: "100%" }}
           />
 
           {sent && (
             <div style={{ marginTop: 10, fontSize: 13, color: "var(--text-secondary)" }}>
-              Password reset email sent. Please check inbox & spam.
+              {tt("recoverySent", "Reset link sent. Please check inbox & spam.")}
             </div>
           )}
 
@@ -119,7 +125,7 @@ export default function AccountRecoveryPage() {
               cursor: loading ? "not-allowed" : "pointer",
             }}
           >
-            {loading ? "Sending..." : "Send password reset email"}
+            {loading ? tt("sending", "Sending…") : tt("recoverySendReset", "Send reset link")}
           </button>
 
           <div style={{ marginTop: 16, display: "flex", justifyContent: "center" }}>
@@ -130,7 +136,7 @@ export default function AccountRecoveryPage() {
               onClick={() => router.push(`${backPath}?next=${encodeURIComponent(nextPath)}`)}
               disabled={loading}
             >
-              Back to login
+              {tt("recoveryBackToLogin", "Back to login")}
             </button>
           </div>
         </div>

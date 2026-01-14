@@ -20,18 +20,13 @@ function dataUrlToBlob(dataUrl: string): Blob {
 }
 
 async function urlToBlob(url: string): Promise<Blob> {
-  // blob: 은 fetch로 바로 blob 가능
   if (url.startsWith("blob:")) {
     const r = await fetch(url);
     return await r.blob();
   }
-
-  // data: 는 직접 변환
   if (url.startsWith("data:")) {
     return dataUrlToBlob(url);
   }
-
-  // https: 등 일반 url
   const r = await fetch(url);
   return await r.blob();
 }
@@ -42,16 +37,19 @@ export async function ensureStorageUrl(args: EnsureArgs): Promise<string> {
 
   const blob = await urlToBlob(url);
 
-  // 확장자 추정
-  const ct = blob.type || "image/jpeg";
+  // ✅ contentType이 비정상인 경우 대비 (Rules: image/* 요구)
+  let ct = (blob.type || "").toLowerCase();
+  if (!ct || !ct.startsWith("image/")) {
+    ct = "image/jpeg";
+  }
+
   const ext =
     ct.includes("png") ? "png" :
     ct.includes("webp") ? "webp" :
     ct.includes("heic") ? "heic" :
     "jpg";
 
-  // ✅ Storage Rules 경로와 반드시 동일해야 함:
-  // orders/{uid}/{orderId}/photo_00.jpg
+  // ✅ Rules 경로와 일치
   const path = `orders/${uid}/${orderId}/photo_${String(index).padStart(2, "0")}.${ext}`;
   const fileRef = ref(storage, path);
 

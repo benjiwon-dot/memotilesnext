@@ -53,7 +53,6 @@ type AppContextValue = {
   user: User | null;
   authLoading: boolean;
 
-  // ✅ 추가: LandingClient 등에서 사용
   isLoggedIn: boolean;
 
   loginWithGoogle: () => Promise<User>;
@@ -126,7 +125,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const didRestoreCartRef = useRef(false);
 
-  // ✅ 추가: 로그인 여부 (기능/UI 영향 없이 derived state)
   const isLoggedIn = !!user;
 
   useEffect(() => {
@@ -162,15 +160,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch {}
   }, []);
 
-  // ✅ redirect 로그인 결과도 처리(팝업 막힐 때 대비)
   useEffect(() => {
     (async () => {
       try {
         const result = await getRedirectResult(auth);
         if (result?.user?.email) saveLastEmail(result.user.email);
-      } catch {
-        // redirect 안 썼으면 무시
-      }
+      } catch {}
     })();
   }, [saveLastEmail]);
 
@@ -182,23 +177,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => unsub();
   }, []);
 
+  /**
+   * ✅ Firestore users upsert (Rules에 맞춰 "허용 필드만" 저장)
+   * - Rules:
+   *   - create: role 금지
+   *   - update: displayName/email/photoURL/updatedAt/updatedAtTs 만 허용, role 금지
+   */
   useEffect(() => {
     const upsertUser = async () => {
       if (!user) return;
-      const providerId = user.providerData?.[0]?.providerId || "unknown";
 
       try {
         await setDoc(
           doc(db, "users", user.uid),
           {
-            uid: user.uid,
+            displayName: user.displayName ?? "",
             email: user.email ?? "",
-            name: user.displayName ?? "",
             photoURL: user.photoURL ?? "",
-            provider: providerId,
-            role: "user",
-            lastLoginAt: serverTimestamp(),
-            emailVerified: user.emailVerified ?? false,
+
+            updatedAt: new Date().toISOString(),
+            updatedAtTs: serverTimestamp(),
           },
           { merge: true }
         );
@@ -292,7 +290,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [DEFAULT_NEXT_AFTER_VERIFY]
   );
 
-  // ✅ 핵심: popup 실패하면 redirect로 fallback (COOP/팝업차단 대비)
   const loginWithGoogle = useCallback(async () => {
     const provider = new GoogleAuthProvider();
     try {
@@ -308,7 +305,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       if (isPopupIssue) {
         await signInWithRedirect(auth, provider);
-        // redirect는 페이지가 이동되므로 여기까지 오지 않는 게 정상.
         throw new Error("Redirecting to Google sign-in…");
       }
       throw e;
@@ -406,7 +402,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       user,
       authLoading,
 
-      // ✅ 추가
       isLoggedIn,
 
       loginWithGoogle,

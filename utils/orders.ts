@@ -1,4 +1,4 @@
-// utils/orders.ts
+// utils/orders.ts  ✅ 통코드 (그대로 교체 OK)
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
@@ -58,14 +58,14 @@ export type CreateOrderPayload = {
   // 배송
   shippingAddress?: any;
 
-  // ✅ 추가: 결제 플로우용
+  // ✅ 결제 플로우용
   status?: string; // payment_pending | paid | failed | cancelled | ...
   publicOrderId?: string; // ORD-1768... (업로드 경로/가독성용)
   paymentProvider?: "stripe" | "none" | string;
 
   // Stripe 연결용 (Webhook에서 채움)
   paymentIntentId?: string;
-  clientSecret?: string; // 보관하고 싶으면(보통은 저장 안해도 됨)
+  clientSecret?: string; // 저장 원할때만
   paymentError?: string;
 
   // 메타
@@ -74,12 +74,7 @@ export type CreateOrderPayload = {
 
 /**
  * ✅ 기존 localStorage 주문 생성(유지)
- * + (차선) Firestore에도 미러링 저장
- *
- * 포인트:
- * - status 기본값을 "paid"로 박아두면 Stripe 붙일 때 꼬임
- * - 그래서 payload.status가 오면 그 값을 우선 사용하고,
- *   없으면 기존 로직 유지(= paid)
+ * + Firestore에도 미러링 저장(실패해도 로컬은 성공)
  */
 export function createOrder(uid: string, payload: CreateOrderPayload) {
   const nowIso = new Date().toISOString();
@@ -88,7 +83,6 @@ export function createOrder(uid: string, payload: CreateOrderPayload) {
     id: makeOrderId(),
     ownerUid: uid,
 
-    // ✅ 기본은 paid(기존 호환) / Stripe 붙일 때는 payment_pending을 넘겨라
     status: (payload.status || "paid").toLowerCase(),
 
     createdAt: nowIso,
@@ -99,23 +93,20 @@ export function createOrder(uid: string, payload: CreateOrderPayload) {
     items: Array.isArray(payload.items) ? payload.items : [],
     shippingAddress: payload.shippingAddress || null,
 
-    // ✅ 결제 메타(선택)
     publicOrderId: payload.publicOrderId || undefined,
     paymentProvider: payload.paymentProvider || undefined,
     paymentIntentId: payload.paymentIntentId || undefined,
-    // clientSecret은 보통 DB에 저장 안하는게 안전하지만,
-    // 니가 저장 원하면 payload로 넘긴 경우에만 저장되도록 처리
     clientSecret: payload.clientSecret || undefined,
     paymentError: payload.paymentError || undefined,
 
     notes: payload.notes || undefined,
   };
 
-  // 1) localStorage 저장(기존 기능 유지)
+  // 1) localStorage 저장
   const existing = safeReadOrders();
   safeWriteOrders([order, ...existing]);
 
-  // 2) Firestore 미러링(실패해도 로컬은 성공)
+  // 2) Firestore 미러링
   (async () => {
     try {
       const safeOrder = stripUndefinedDeep({
@@ -133,8 +124,15 @@ export function createOrder(uid: string, payload: CreateOrderPayload) {
   return order;
 }
 
-export function getOrders(): AnyOrder[] {
-  return safeReadOrders();
+/**
+ * ✅ 핵심 수정: getOrders가 uid 인자도 받도록 "호환" 제공
+ * - getOrders()        : 전체 반환 (기존 호환)
+ * - getOrders(uid)     : 해당 유저 주문만 반환 (my-orders 코드 호환)
+ */
+export function getOrders(uid?: string): AnyOrder[] {
+  const list = safeReadOrders();
+  if (!uid) return list;
+  return Array.isArray(list) ? list.filter((o) => o?.ownerUid === uid) : [];
 }
 
 export function updateOrderStatus(orderId: string, status: string) {
@@ -150,7 +148,7 @@ export function updateOrderStatus(orderId: string, status: string) {
 
   safeWriteOrders(list);
 
-  // Firestore에도 반영(차선)
+  // Firestore에도 반영
   (async () => {
     try {
       const safePatch = stripUndefinedDeep({
@@ -167,8 +165,7 @@ export function updateOrderStatus(orderId: string, status: string) {
 }
 
 /**
- * ✅ Stripe용: 결제 정보 업데이트 (Webhook에서 사용하기 좋음)
- * - paymentIntentId / paidAt / 실패 사유 등을 여기로 넣으면 깔끔함
+ * ✅ Stripe용: 결제 정보 업데이트
  */
 export function updateOrderPayment(
   orderId: string,
@@ -185,7 +182,9 @@ export function updateOrderPayment(
   const list = safeReadOrders();
   const idx = list.findIndex((o) => o?.id === orderId);
 
-  const nextLocal = idx === -1 ? null : { ...list[idx], ...patch, updatedAt: new Date().toISOString() };
+  const nextLocal =
+    idx === -1 ? null : { ...list[idx], ...patch, updatedAt: new Date().toISOString() };
+
   if (nextLocal) {
     list[idx] = nextLocal;
     safeWriteOrders(list);

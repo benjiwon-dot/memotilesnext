@@ -1,3 +1,4 @@
+// app/checkout/CheckoutClient.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -71,13 +72,10 @@ declare global {
 
 async function loadTossPaymentsScript() {
   if (typeof window === "undefined") return;
-
-  // 이미 로드됐으면 패스
   if (window.TossPayments) return;
 
   await new Promise<void>((resolve, reject) => {
     const s = document.createElement("script");
-    // v2 표준 스크립트 (국제결제 포함 가이드에서 쓰는 형태가 있음)
     s.src = "https://js.tosspayments.com/v2/standard";
     s.async = true;
     s.onload = () => resolve();
@@ -156,7 +154,15 @@ export default function CheckoutClient() {
     return Array.isArray(cart) ? cart.reduce((sum, it) => sum + (Number(it.qty) || 1), 0) : 0;
   }, [cart]);
 
-  const total = useMemo(() => tilesCount * 200, [tilesCount]); // 200 THB / tile
+  // ✅ 화면 표시용 (THB)
+  const totalTHB = useMemo(() => tilesCount * 200, [tilesCount]); // 200 THB / tile
+
+  // ✅ 토스 결제 요청용 (KRW) — 테스트용 환산(임의)
+  // 나중에 정책 정해지면 여기만 바꾸면 됨
+  const totalKRW = useMemo(() => {
+    const v = Math.round(tilesCount * 2000); // 예: 1장 = 2,000원
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  }, [tilesCount]);
 
   const startPaymentFlow = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -177,10 +183,13 @@ export default function CheckoutClient() {
       return alert("Missing NEXT_PUBLIC_TOSS_CLIENT_KEY in .env.local");
     }
 
+    if (!Number.isFinite(totalKRW) || totalKRW <= 0) {
+      return alert("Invalid payment amount.");
+    }
+
     setBusy(true);
     setStepLabel("");
 
-    // ✅ public orderId는 한 번만 생성
     const publicOrderId = `ORD-${Date.now()}`;
 
     try {
@@ -211,48 +220,46 @@ export default function CheckoutClient() {
         });
       }
 
-      // 2) 주문 생성(결제 전)
+      // 2) 주문 생성(결제 전) — DB에는 THB 기준으로 저장(너 기존 UX 유지)
       setStepLabel(tr("creatingOrder", "Creating order…"));
 
       const order = createOrder(uid, {
         items: uploadedItems,
-        total,
+        total: totalTHB,          // ✅ 표시/주문 기준 THB 유지
         currency: "THB",
         shippingAddress: cleanedShipping,
         status: "payment_pending",
         publicOrderId: publicOrderId,
+        paymentProvider: "toss",
       } as any);
 
-      // 3) Toss 결제창 오픈 (Pay with Card)
+      // 3) Toss 결제창 오픈 (v2)
       setStepLabel(tr("openingPayment", "Opening secure payment…"));
 
       await loadTossPaymentsScript();
 
       const origin = window.location.origin;
 
-      // Toss 문서: 성공 시 successUrl로 이동하고 paymentKey/orderId/amount 쿼리가 붙음
-      // 또한 amount 검증을 요구함
-      // :contentReference[oaicite:10]{index=10}
-
       const tossPayments = window.TossPayments(tossClientKey);
+      const payment = tossPayments.payment({ customerKey: uid });
 
-      // cart는 결제창 뜨기 직전 비워도 되지만, 실패/뒤로가기 대비해서 유지해도 됨
-      // UX상 비우려면 여기서 비워도 OK
       if (typeof app?.setCart === "function") app.setCart([]);
 
-      await tossPayments.requestPayment("CARD", {
-        amount: total,
+      await payment.requestPayment({
+        method: "CARD",
+
+        // ✅ 핵심: Toss는 KRW 통화로 보내야 함
+        amount: { currency: "KRW", value: totalKRW },
+
         orderId: publicOrderId,
         orderName: `MEMOTILE ${tilesCount} tiles`,
         customerName: cleanedShipping.fullName || "Customer",
         customerEmail: email,
 
-        // ✅ docId를 우리가 추가로 붙여서, success에서 Firestore 주문을 찾게 함
         successUrl: `${origin}/toss/success?docId=${encodeURIComponent(order.id)}`,
         failUrl: `${origin}/toss/fail?docId=${encodeURIComponent(order.id)}`,
       });
 
-      // requestPayment가 리다이렉트로 이동하면 아래는 실행 안 되는 경우가 많음
       setStepLabel("");
     } catch (err: any) {
       console.error(err);
@@ -427,7 +434,7 @@ export default function CheckoutClient() {
             </form>
           </div>
 
-          {/* Right: Summary + Continue button under Total */}
+          {/* Right: Summary */}
           <div>
             <div className="card" style={{ position: "sticky", top: "100px" }}>
               <h3 style={{ fontSize: "1.25rem", fontWeight: 950, marginBottom: "1rem" }}>
@@ -477,7 +484,7 @@ export default function CheckoutClient() {
                 <span style={{ color: "var(--text-secondary)" }}>
                   {tilesCount} {tr("tilesCount", "tiles")}
                 </span>
-                <span>฿{total}</span>
+                <span>฿{totalTHB}</span>
               </div>
 
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1rem" }}>
@@ -497,10 +504,9 @@ export default function CheckoutClient() {
                 }}
               >
                 <span>{tr("total", "Total")}</span>
-                <span>฿{total}</span>
+                <span>฿{totalTHB}</span>
               </div>
 
-              {/* ✅ Total 아래: 결제 버튼 */}
               <button
                 type="submit"
                 form="checkout-form"
@@ -521,9 +527,13 @@ export default function CheckoutClient() {
                 {tr("checkoutNote", "This will upload your photos and open secure card payment.")}
               </div>
 
-              {/* ✅ 태국 사용자용: PG 브랜드 노출 없이 카드 신뢰 요소 */}
               <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-tertiary)" }}>
                 {tr("currencyNote", "Currency: THB • Visa / Mastercard / JCB • Bank app confirmation may be required")}
+              </div>
+
+              {/* ✅ 디버그용(원하면 나중에 지워도 됨): 토스 결제 요청 금액 */}
+              <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-tertiary)" }}>
+                Toss charge (test): ₩{totalKRW}
               </div>
             </div>
           </div>
