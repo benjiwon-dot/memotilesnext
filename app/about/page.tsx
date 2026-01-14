@@ -141,7 +141,7 @@ export default function AboutPage() {
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src="/assets/about/about-hero-wall.jpg"
-                  alt="Memotiles Gallery Wall"
+                  alt="Memotile Gallery Wall"
                   style={{ width: "100%", display: "block" }}
                 />
               </div>
@@ -215,7 +215,7 @@ export default function AboutPage() {
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src="/assets/about/hero.png"
-                  alt="Memotiles Interior"
+                  alt="Memotile Interior"
                   style={{ width: "100%", display: "block" }}
                 />
               </div>
@@ -234,7 +234,7 @@ export default function AboutPage() {
             <FadeInSection animation="fade-up" delay={0.2}>
               <div style={{ ...imageContainerStyle, maxWidth: "500px" }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/assets/about/gift.png" alt="Memotiles Gift" style={{ width: "100%", display: "block" }} />
+                <img src="/assets/about/gift.png" alt="Memotile Gift" style={{ width: "100%", display: "block" }} />
               </div>
             </FadeInSection>
           </div>

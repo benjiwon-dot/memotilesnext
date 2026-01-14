@@ -1,69 +1,60 @@
 // utils/storageUpload.ts
-"use client";
-
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { storage } from "@/lib/firebase";
 
 type EnsureArgs = {
-  url: string;      // blob:..., data:..., https:...
+  url: string;      // blob:... or data:... or https:...
   uid: string;
-  orderId: string;
-  index: number;
+  orderId: string;  // public order id like ORD-...
+  index: number;    // 0,1,2...
 };
 
-function isHttpUrl(u: string) {
-  return /^https?:\/\//i.test(u);
+function dataUrlToBlob(dataUrl: string): Blob {
+  const [header, base64] = dataUrl.split(",");
+  const mimeMatch = header.match(/data:(.*?);base64/);
+  const mime = mimeMatch?.[1] || "application/octet-stream";
+  const bytes = atob(base64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  return new Blob([arr], { type: mime });
 }
 
-function isDataUrl(u: string) {
-  return /^data:/i.test(u);
+async function urlToBlob(url: string): Promise<Blob> {
+  // blob: 은 fetch로 바로 blob 가능
+  if (url.startsWith("blob:")) {
+    const r = await fetch(url);
+    return await r.blob();
+  }
+
+  // data: 는 직접 변환
+  if (url.startsWith("data:")) {
+    return dataUrlToBlob(url);
+  }
+
+  // https: 등 일반 url
+  const r = await fetch(url);
+  return await r.blob();
 }
 
-function isBlobUrl(u: string) {
-  return /^blob:/i.test(u);
-}
+export async function ensureStorageUrl(args: EnsureArgs): Promise<string> {
+  const { url, uid, orderId, index } = args;
+  if (!url) return "";
 
-async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
-  const res = await fetch(dataUrl);
-  return await res.blob();
-}
+  const blob = await urlToBlob(url);
 
-async function fetchToBlob(url: string): Promise<Blob> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch image (${res.status})`);
-  return await res.blob();
-}
+  // 확장자 추정
+  const ct = blob.type || "image/jpeg";
+  const ext =
+    ct.includes("png") ? "png" :
+    ct.includes("webp") ? "webp" :
+    ct.includes("heic") ? "heic" :
+    "jpg";
 
-/**
- * ✅ blob/data url이면 Storage에 업로드 후 downloadURL 반환
- * ✅ 이미 http(s)면 그대로 반환
- */
-export async function ensureStorageUrl({ url, uid, orderId, index }: EnsureArgs): Promise<string> {
-  const u = (url || "").trim();
-  if (!u) return "";
+  // ✅ Storage Rules 경로와 반드시 동일해야 함:
+  // orders/{uid}/{orderId}/photo_00.jpg
+  const path = `orders/${uid}/${orderId}/photo_${String(index).padStart(2, "0")}.${ext}`;
+  const fileRef = ref(storage, path);
 
-  // 이미 영구 URL이면 그대로
-  if (isHttpUrl(u) && u.includes("firebasestorage")) return u;
-  if (isHttpUrl(u) && !isBlobUrl(u) && !isDataUrl(u)) return u;
-
-  // blob/data -> Blob 만들기
-  let blob: Blob;
-  if (isDataUrl(u)) blob = await dataUrlToBlob(u);
-  else if (isBlobUrl(u)) blob = await fetchToBlob(u);
-  else blob = await fetchToBlob(u); // 혹시 다른 형태면 fallback
-
-  // 업로드 경로 (rules와 반드시 일치해야 함)
-  const filename = `photo_${String(index).padStart(2, "0")}.jpg`;
-  const path = `orders/${uid}/${orderId}/${filename}`;
-
-  const storageRef = ref(storage, path);
-
-  // 업로드
-  await uploadBytes(storageRef, blob, {
-    contentType: blob.type || "image/jpeg",
-    cacheControl: "public,max-age=31536000",
-  });
-
-  // 다운로드 URL
-  return await getDownloadURL(storageRef);
+  await uploadBytes(fileRef, blob, { contentType: ct });
+  return await getDownloadURL(fileRef);
 }

@@ -190,7 +190,7 @@ export default function LoginClient() {
           onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.85")}
           onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
         >
-          MEMOTILES
+          MEMOTILE
         </button>
 
         <p style={{ color: "var(--text-secondary)", marginBottom: "2rem" }}>

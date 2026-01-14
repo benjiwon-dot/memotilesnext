@@ -194,17 +194,17 @@ export const translations: Record<Locale, TranslationDict> = {
     step2Desc: "Fit perfectly in a square 20×20 cm tile.",
     step3Title: "3. Checkout & delivery",
     step3Desc: "We print specifically for you and deliver to your door.",
-    realWallsTitle: "See how Memotiles looks on real walls",
+    realWallsTitle: "See how Memotile looks on real walls",
     realWallsDesc: "Reusable stickers. Easy to rearrange.",
     followUs: "Follow us on Instagram",
     deliveryHighlightTitle: "Delivered in just 5 days",
     deliveryHighlightSubtitle: "From upload to delivery",
     aboutHeroTitle: "Creating moments that stay in your space.",
     aboutHeroSubtitle:
-      "Memotiles are photo tiles that turn memories with loved ones into the atmosphere and emotion of your home.",
+      "Memotile are photo tiles that turn memories with loved ones into the atmosphere and emotion of your home.",
     aboutSection2Title: "Designed for the images you love",
     aboutSection2Body:
-      "From moments of travel and family expressions to images that remind you of your loved ones. Memotiles are designed for impressive images and poster-style displays in personal spaces.",
+      "From moments of travel and family expressions to images that remind you of your loved ones. Memotile are designed for impressive images and poster-style displays in personal spaces.",
     aboutNote: "*Based on the use of images for appreciation in personal spaces.",
     aboutSection3Title: "Easy to install, free to change",
     aboutBullet1: "Install without nails or tools",
@@ -212,10 +212,10 @@ export const translations: Record<Locale, TranslationDict> = {
     aboutBullet3: "Rearrange anytime to fit your space",
     aboutSection4Title: "More than interior — a thoughtful gift",
     aboutSection4Body:
-      "Memotiles is more than just wall decor. It makes a sensible gift for loved ones on moving days, anniversaries, and special occasions. Create a meaningful choice that stays in the recipient's space for a long time.",
+      "Memotile is more than just wall decor. It makes a sensible gift for loved ones on moving days, anniversaries, and special occasions. Create a meaningful choice that stays in the recipient's space for a long time.",
     aboutSection5Title: "Our belief",
     aboutSection5Body:
-      "We believe that images should be experienced in space, not just stored. Memotiles naturally blends into your space and the daily life of your loved ones.",
+      "We believe that images should be experienced in space, not just stored. Memotile naturally blends into your space and the daily life of your loved ones.",
     aboutCta: "Create your tiles",
 
     // Login
@@ -375,17 +375,17 @@ export const translations: Record<Locale, TranslationDict> = {
     step2Desc: "ปรับให้พอดีกับแผ่นขนาด 20×20 ซม.",
     step3Title: "3. ชำระเงินและจัดส่ง",
     step3Desc: "เราพิมพ์ให้คุณโดยเฉพาะและจัดส่งถึงหน้าบ้าน",
-    realWallsTitle: "ดูตัวอย่าง Memotiles บนผนังจริง",
+    realWallsTitle: "ดูตัวอย่าง Memotile บนผนังจริง",
     realWallsDesc: "ติดซ้ำได้ ปรับเปลี่ยนตำแหน่งง่าย",
     followUs: "ติดตามเราบน Instagram",
     deliveryHighlightTitle: "ได้รับสินค้าภายใน 5 วัน",
     deliveryHighlightSubtitle: "นับจากเริ่มสั่งจนถึงหน้าบ้านคุณ",
     aboutHeroTitle: "สร้างช่วงเวลาที่คงอยู่ในพื้นที่ของคุณ",
     aboutHeroSubtitle:
-      "Memotiles คือแผ่นภาพถ่ายที่เปลี่ยนความทรงจำกับคนที่คุณรัก ให้กลายเป็นบรรยากาศและความรู้สึกภายในบ้าน",
+      "Memotile คือแผ่นภาพถ่ายที่เปลี่ยนความทรงจำกับคนที่คุณรัก ให้กลายเป็นบรรยากาศและความรู้สึกภายในบ้าน",
     aboutSection2Title: "ออกแบบมาเพื่อภาพที่คุณรัก",
     aboutSection2Body:
-      "ตั้งแต่ช่วงเวลาแห่งการเดินทาง รอยยิ้มของครอบครัว ไปจนถึงภาพที่ทำให้คุณนึกถึงคนที่รัก Memotiles ถูกออกแบบมาเพื่อการจัดวางภาพที่ประทับใจในสไตล์โปสเตอร์ภายในพื้นที่ส่วนตัวของคุณ",
+      "ตั้งแต่ช่วงเวลาแห่งการเดินทาง รอยยิ้มของครอบครัว ไปจนถึงภาพที่ทำให้คุณนึกถึงคนที่รัก Memotile ถูกออกแบบมาเพื่อการจัดวางภาพที่ประทับใจในสไตล์โปสเตอร์ภายในพื้นที่ส่วนตัวของคุณ",
     aboutNote: "*สำหรับการใช้งานภาพเพื่อการชื่นชมในพื้นที่ส่วนตัว",
     aboutSection3Title: "ติดตั้งง่าย เปลี่ยนแปลงได้ดั่งใจ",
     aboutBullet1: "ติดตั้งโดยไม่ต้องใช้ตะปูหรือเครื่องมือ",
@@ -393,10 +393,10 @@ export const translations: Record<Locale, TranslationDict> = {
     aboutBullet3: "จัดวางใหม่ได้ทุกเมื่อเพื่อให้เข้ากับพื้นที่ของคุณ",
     aboutSection4Title: "เป็นทั้งของตกแต่ง และของขวัญที่แทนใจ",
     aboutSection4Body:
-      "Memotiles เป็นมากกว่าแค่ของตกแต่งผนัง แต่เป็นของขวัญที่เปี่ยมด้วยรสนิยมสำหรับคนที่คุณรักในวันขึ้นบ้านใหม่ วันครบรอบ หรือโอกาสพิเศษ สร้างตัวเลือกที่มีความหมายซึ่งจะคงอยู่ในพื้นที่ของผู้รับไปอีกนาน",
+      "Memotile เป็นมากกว่าแค่ของตกแต่งผนัง แต่เป็นของขวัญที่เปี่ยมด้วยรสนิยมสำหรับคนที่คุณรักในวันขึ้นบ้านใหม่ วันครบรอบ หรือโอกาสพิเศษ สร้างตัวเลือกที่มีความหมายซึ่งจะคงอยู่ในพื้นที่ของผู้รับไปอีกนาน",
     aboutSection5Title: "ความเชื่อของเรา",
     aboutSection5Body:
-      "เราเชื่อว่ารูปภาพไม่ควรเป็นเพียงสิ่งที่ถูกบันทึกไว้ แต่ควรได้รับการสัมผัสในพื้นที่จริง Memotiles จะกลมกลืนเข้ากับพื้นที่ของคุณและชีวิตประจำวันของคนที่คุณรักอย่างเป็นธรรมชาติ",
+      "เราเชื่อว่ารูปภาพไม่ควรเป็นเพียงสิ่งที่ถูกบันทึกไว้ แต่ควรได้รับการสัมผัสในพื้นที่จริง Memotile จะกลมกลืนเข้ากับพื้นที่ของคุณและชีวิตประจำวันของคนที่คุณรักอย่างเป็นธรรมชาติ",
     aboutCta: "สร้างแผ่นภาพของคุณ",
 
     // Login
@@ -434,12 +434,7 @@ export const translations: Record<Locale, TranslationDict> = {
     recoverySendFailed: "ส่งอีเมลรีเซ็ตไม่สำเร็จ",
     sending: "กำลังส่ง…",
 
-    aboutUs: "เกี่ยวกับเรา",
-    terms: "ข้อกำหนด",
-    privacy: "ความเป็นส่วนตัว",
-    support: "ช่วยเหลือ",
-    contactUs: "ติดต่อเรา",
-
+    
     // Dashboard
     uploadStep: "อัปโหลด",
     cropStep: "ปรับแต่ง",

@@ -33,12 +33,12 @@ const PRIVACY_CONTENT: Record<Lang, PrivacyContent> = {
       {
         title: "3. Data Retention",
         content:
-          "MEMOTILES retains personal data only as long as necessary to fulfill the purposes of collection or as required by applicable laws.",
+          "MEMOTILE retains personal data only as long as necessary to fulfill the purposes of collection or as required by applicable laws.",
       },
       {
         title: "4. Third-Party Sharing",
         content:
-          "MEMOTILES does not sell or share personal data with third parties except in the following cases:\n- Sharing information with logistics providers for delivery\n- Sharing information with payment processors for transactions\n- When required by law or for investigative purposes",
+          "MEMOTILE does not sell or share personal data with third parties except in the following cases:\n- Sharing information with logistics providers for delivery\n- Sharing information with payment processors for transactions\n- When required by law or for investigative purposes",
       },
       {
         title: "5. Data Processing Outsourcing",
@@ -53,7 +53,7 @@ const PRIVACY_CONTENT: Record<Lang, PrivacyContent> = {
       {
         title: "7. Data Security Measures",
         content:
-          "MEMOTILES implements technical and organizational safeguards to protect your information and maintain high security standards.",
+          "MEMOTILE implements technical and organizational safeguards to protect your information and maintain high security standards.",
       },
       {
         title: "8. Children and Teen Users",
@@ -94,12 +94,12 @@ const PRIVACY_CONTENT: Record<Lang, PrivacyContent> = {
       {
         title: "3. การเก็บรักษาข้อมูล",
         content:
-          "MEMOTILES จะเก็บรักษาข้อมูลส่วนบุคคลไว้ตราบเท่าที่จำเป็นเพื่อให้บรรลุวัตถุประสงค์ในการรวบรวม หรือตามที่กฎหมายกำหนด",
+          "MEMOTILE จะเก็บรักษาข้อมูลส่วนบุคคลไว้ตราบเท่าที่จำเป็นเพื่อให้บรรลุวัตถุประสงค์ในการรวบรวม หรือตามที่กฎหมายกำหนด",
       },
       {
         title: "4. การแบ่งปันข้อมูลกับบุคคลที่สาม",
         content:
-          "MEMOTILES จะไม่ขายหรือแบ่งปันข้อมูลส่วนบุคคลกับบุคคลที่สาม ยกเว้นในกรณีต่อไปนี้:\n- การแบ่งปันข้อมูลกับผู้ให้บริการขนส่ง\n- การแบ่งปันข้อมูลกับผู้ให้บริการชำระเงิน\n- เมื่อกฎหมายกำหนด",
+          "MEMOTILE จะไม่ขายหรือแบ่งปันข้อมูลส่วนบุคคลกับบุคคลที่สาม ยกเว้นในกรณีต่อไปนี้:\n- การแบ่งปันข้อมูลกับผู้ให้บริการขนส่ง\n- การแบ่งปันข้อมูลกับผู้ให้บริการชำระเงิน\n- เมื่อกฎหมายกำหนด",
       },
       {
         title: "5. การจ้างภายนอกเพื่อประมวลผลข้อมูล",

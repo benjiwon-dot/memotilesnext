@@ -77,7 +77,7 @@ export default function Navbar({ variant = "marketing" }: { variant?: "marketing
               textDecoration: "none",
             }}
           >
-            MEMOTILES
+            MEMOTILE
           </Link>
 
           {!isApp && (

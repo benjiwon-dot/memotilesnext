@@ -31,7 +31,7 @@ export default function Footer() {
           gap: "2rem",
         }}
       >
-        <div style={{ fontWeight: "bold", fontSize: "1.25rem" }}>MEMOTILES</div>
+        <div style={{ fontWeight: "bold", fontSize: "1.25rem" }}>MEMOTILE</div>
 
         <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap", justifyContent: "center" }}>
           <Link href="/about" className="btn-text">
@@ -52,7 +52,7 @@ export default function Footer() {
         </div>
 
         <div style={{ color: "var(--text-tertiary)", fontSize: "0.875rem" }}>
-          &copy; {new Date().getFullYear()} Memotiles. {tr("allRightsReserved", "All rights reserved.")}
+          &copy; {new Date().getFullYear()} Memotile. {tr("allRightsReserved", "All rights reserved.")}
         </div>
       </div>
     </footer>

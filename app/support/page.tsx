@@ -16,12 +16,12 @@ const SUPPORT_CONTENT = {
       {
         question: "What if my tiles fall off the wall?",
         answer:
-          "MEMOTILES tiles are designed to be removable and reusable. You can attach and remove them multiple times. If you experience any issues with adhesion, please contact our customer support team and we will assist you promptly.",
+          "MEMOTILE tiles are designed to be removable and reusable. You can attach and remove them multiple times. If you experience any issues with adhesion, please contact our customer support team and we will assist you promptly.",
       },
       {
         question: "What if my photo quality is low?",
         answer:
-          "MEMOTILES is known for high-quality printing results. If you receive a damaged product or experience print quality issues, please contact our customer support team. We will review the issue and provide a fast resolution when applicable.",
+          "MEMOTILE is known for high-quality printing results. If you receive a damaged product or experience print quality issues, please contact our customer support team. We will review the issue and provide a fast resolution when applicable.",
       },
       {
         question: "Can I modify my order after placing it?",
@@ -44,12 +44,12 @@ const SUPPORT_CONTENT = {
       {
         question: "ถ้าแผ่นภาพหลุดจากผนังต้องทำอย่างไร?",
         answer:
-          "แผ่นภาพ MEMOTILES ถูกออกแบบมาให้ลอกออกและติดใหม่ได้หลายครั้ง คุณสามารถติดและลอกออกได้ซ้ำๆ หากคุณพบปัญหาในการยึดเกาะ โปรดติดต่อทีมสนับสนุนลูกค้าของเราและเราจะช่วยเหลือคุณโดยเร็วที่สุด",
+          "แผ่นภาพ MEMOTILE ถูกออกแบบมาให้ลอกออกและติดใหม่ได้หลายครั้ง คุณสามารถติดและลอกออกได้ซ้ำๆ หากคุณพบปัญหาในการยึดเกาะ โปรดติดต่อทีมสนับสนุนลูกค้าของเราและเราจะช่วยเหลือคุณโดยเร็วที่สุด",
       },
       {
         question: "ถ้าคุณภาพรูปภาพต่ำจะเป็นอย่างไร?",
         answer:
-          "MEMOTILES มีชื่อเสียงด้านคุณภาพการพิมพ์ที่สูง หากคุณได้รับสินค้าที่ชำรุดหรือพบปัญหาด้านคุณภาพการพิมพ์ โปรดติดต่อทีมสนับสนุนลูกค้าของเรา เราจะตรวจสอบปัญหาและหาทางแก้ไขที่รวดเร็วให้คุณ",
+          "MEMOTILE มีชื่อเสียงด้านคุณภาพการพิมพ์ที่สูง หากคุณได้รับสินค้าที่ชำรุดหรือพบปัญหาด้านคุณภาพการพิมพ์ โปรดติดต่อทีมสนับสนุนลูกค้าของเรา เราจะตรวจสอบปัญหาและหาทางแก้ไขที่รวดเร็วให้คุณ",
       },
       {
         question: "ฉันสามารถแก้ไขคำสั่งซื้อหลังจากสั่งไปแล้วได้ไหม?",

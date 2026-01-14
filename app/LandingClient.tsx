@@ -1,9 +1,16 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useApp } from "../context/AppContext";
-import { Upload, Crop, Truck, Instagram } from "lucide-react";
+import {
+  Upload,
+  Crop,
+  Truck,
+  Instagram,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 import MarketingLayout from "../components/MarketingLayout";
 import HeroHowItWorksMini from "../components/HeroHowItWorksMini";
 
@@ -17,6 +24,42 @@ export default function LandingClient() {
   };
 
   const IG_URL = "https://www.instagram.com/runner_better";
+
+  // -------------------------
+  // Instagram carousel settings
+  // -------------------------
+  const IG_COUNT = 10; // 필요하면 늘려도 됨
+  const igItems = useMemo(() => Array.from({ length: IG_COUNT }, (_, i) => i), []);
+
+  const [visibleCount, setVisibleCount] = useState(5); // desktop default
+  const [page, setPage] = useState(0);
+
+  useEffect(() => {
+    const calc = () => {
+      const w = window.innerWidth;
+      if (w < 480) return 2;
+      if (w < 768) return 3;
+      if (w < 1024) return 4;
+      return 5;
+    };
+    const apply = () => setVisibleCount(calc());
+    apply();
+    window.addEventListener("resize", apply);
+    return () => window.removeEventListener("resize", apply);
+  }, []);
+
+  // visibleCount 바뀌면 page가 범위 밖으로 나가지 않게 보정
+  useEffect(() => {
+    const maxPage = Math.max(0, Math.ceil(igItems.length / visibleCount) - 1);
+    setPage((p) => Math.min(p, maxPage));
+  }, [visibleCount, igItems.length]);
+
+  const maxPage = Math.max(0, Math.ceil(igItems.length / visibleCount) - 1);
+  const canPrev = page > 0;
+  const canNext = page < maxPage;
+
+  const goPrev = () => setPage((p) => Math.max(0, p - 1));
+  const goNext = () => setPage((p) => Math.min(maxPage, p + 1));
 
   return (
     <MarketingLayout>
@@ -307,57 +350,158 @@ export default function LandingClient() {
           </div>
         </section>
 
-        {/* Instagram */}
+        {/* Instagram (1-row carousel) */}
         <section style={{ padding: "6rem 1rem", backgroundColor: "#FFFFFF" }}>
           <div className="container" style={{ textAlign: "center" }}>
             <h2 style={{ fontSize: "2rem", fontWeight: "bold", marginBottom: "0.5rem" }}>
               {t("realWallsTitle")}
             </h2>
-            <p style={{ color: "var(--text-secondary)", marginBottom: "3rem" }}>
+            <p style={{ color: "var(--text-secondary)", marginBottom: "2rem" }}>
               {t("realWallsDesc")}
             </p>
 
+            {/* Carousel frame */}
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-                gap: "1rem",
-                marginBottom: "3rem",
+                position: "relative",
+                maxWidth: "1100px",
+                margin: "0 auto 2rem",
               }}
             >
-              {[...Array(8)].map((_, i) => (
-                <a
-                  key={i}
-                  href={IG_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="instagram-tile ig-tile"
+              {/* Left Arrow */}
+              <button
+                type="button"
+                onClick={goPrev}
+                disabled={!canPrev}
+                aria-label="Previous"
+                style={{
+                  position: "absolute",
+                  left: -10,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  width: 44,
+                  height: 44,
+                  borderRadius: 9999,
+                  border: "1px solid var(--border)",
+                  background: "white",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  boxShadow: "var(--shadow-sm)",
+                  cursor: canPrev ? "pointer" : "not-allowed",
+                  opacity: canPrev ? 1 : 0.35,
+                  zIndex: 2,
+                }}
+              >
+                <ChevronLeft size={20} />
+              </button>
+
+              {/* Right Arrow */}
+              <button
+                type="button"
+                onClick={goNext}
+                disabled={!canNext}
+                aria-label="Next"
+                style={{
+                  position: "absolute",
+                  right: -10,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  width: 44,
+                  height: 44,
+                  borderRadius: 9999,
+                  border: "1px solid var(--border)",
+                  background: "white",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  boxShadow: "var(--shadow-sm)",
+                  cursor: canNext ? "pointer" : "not-allowed",
+                  opacity: canNext ? 1 : 0.35,
+                  zIndex: 2,
+                }}
+              >
+                <ChevronRight size={20} />
+              </button>
+
+              {/* viewport */}
+              <div
+                style={{
+                  overflow: "hidden",
+                  borderRadius: "1.25rem",
+                }}
+              >
+                {/* track */}
+                <div
                   style={{
-                    display: "block",
-                    aspectRatio: "1/1",
-                    backgroundColor: "#F3F4F6",
-                    borderRadius: "var(--radius-md)",
-                    position: "relative",
-                    overflow: "hidden",
-                    cursor: "pointer",
+                    display: "flex",
+                    gap: "1rem",
+                    padding: "0.25rem",
+                    transform: `translateX(-${page * 100}%)`,
+                    transition: "transform .35s ease",
+                    width: `${(igItems.length / visibleCount) * 100}%`,
                   }}
                 >
-                  <div
-                    className="ig-tile-overlay"
+                  {igItems.map((i) => (
+                    <a
+                      key={i}
+                      href={IG_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="instagram-tile ig-tile"
+                      style={{
+                        flex: `0 0 calc(${100 / igItems.length}% * ${igItems.length / visibleCount})`,
+                        // 위 줄은 "보이는 개수"에 맞게 width를 맞추기 위한 계산
+                        aspectRatio: "1/1",
+                        backgroundColor: "#F3F4F6",
+                        borderRadius: "1.25rem",
+                        position: "relative",
+                        overflow: "hidden",
+                        cursor: "pointer",
+                        border: "1px solid rgba(17,24,39,0.06)",
+                      }}
+                    >
+                      {/* TODO: 나중에 실제 IG 이미지 썸네일로 교체 가능 */}
+                      <div
+                        className="ig-tile-overlay"
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          backgroundColor: "rgba(0,0,0,0.3)",
+                          color: "white",
+                          fontWeight: 700,
+                        }}
+                      >
+                        View on Instagram
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              </div>
+
+              {/* dots (optional, 깔끔하게 작게) */}
+              <div style={{ marginTop: "1rem", display: "flex", justifyContent: "center", gap: 8 }}>
+                {Array.from({ length: maxPage + 1 }, (_, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setPage(idx)}
+                    aria-label={`Go to page ${idx + 1}`}
                     style={{
-                      position: "absolute",
-                      inset: 0,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      backgroundColor: "rgba(0,0,0,0.3)",
-                      color: "white",
+                      width: idx === page ? 18 : 8,
+                      height: 8,
+                      borderRadius: 9999,
+                      border: "none",
+                      background: idx === page ? "#111827" : "rgba(17,24,39,0.18)",
+                      cursor: "pointer",
+                      transition: "all .2s ease",
                     }}
-                  >
-                    View on Instagram
-                  </div>
-                </a>
-              ))}
+                  />
+                ))}
+              </div>
             </div>
 
             <a
