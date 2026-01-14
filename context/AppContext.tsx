@@ -1,5 +1,4 @@
-// context/AppContext.tsx (변경된 부분만 있는 게 아니라 "통코드"로 교체해도 됨)
-// ✅ 너가 준 코드 기반 + loginWithGoogle만 차선 강화
+// context/AppContext.tsx  ✅ 통코드 (그대로 교체 OK)
 
 "use client";
 
@@ -53,6 +52,9 @@ const SESSION_CART_KEY = "MYTILE_ORDER_ITEMS";
 type AppContextValue = {
   user: User | null;
   authLoading: boolean;
+
+  // ✅ 추가: LandingClient 등에서 사용
+  isLoggedIn: boolean;
 
   loginWithGoogle: () => Promise<User>;
   registerWithEmail: (email: string, password: string, fullName: string) => Promise<User>;
@@ -124,6 +126,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const didRestoreCartRef = useRef(false);
 
+  // ✅ 추가: 로그인 여부 (기능/UI 영향 없이 derived state)
+  const isLoggedIn = !!user;
+
   useEffect(() => {
     try {
       const v = localStorage.getItem("MEMOTILES_LAST_EMAIL");
@@ -163,7 +168,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         const result = await getRedirectResult(auth);
         if (result?.user?.email) saveLastEmail(result.user.email);
-      } catch (e) {
+      } catch {
         // redirect 안 썼으면 무시
       }
     })();
@@ -401,6 +406,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       user,
       authLoading,
 
+      // ✅ 추가
+      isLoggedIn,
+
       loginWithGoogle,
       registerWithEmail,
       loginWithEmail,
@@ -426,6 +434,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [
       user,
       authLoading,
+      isLoggedIn,
       loginWithGoogle,
       registerWithEmail,
       loginWithEmail,
