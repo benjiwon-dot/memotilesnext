@@ -1,6 +1,8 @@
-// utils/orders.ts  ✅ 통코드 (그대로 교체 OK)
+// utils/orders.ts
+"use client";
+
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { getFirebaseClient } from "@/lib/firebase.client";
 
 const ORDERS_KEY = "memotiles_orders";
 
@@ -48,6 +50,19 @@ function stripUndefinedDeep<T>(input: T): T {
     return out;
   }
   return input;
+}
+
+/**
+ * ✅ Firestore 미러링: Firebase가 없으면 조용히 스킵(로컬은 계속 됨)
+ */
+async function mirrorToFirestore(docId: string, data: any) {
+  try {
+    const { db } = getFirebaseClient();
+    await setDoc(doc(db, "orders", docId), data, { merge: true });
+  } catch (e) {
+    // firebase 미설정 / rules / 네트워크 등으로 실패 가능 → 로컬 기능 유지 위해 조용히
+    console.warn("[Firestore] mirror skipped/failed:", e);
+  }
 }
 
 export type CreateOrderPayload = {
@@ -106,19 +121,14 @@ export function createOrder(uid: string, payload: CreateOrderPayload) {
   const existing = safeReadOrders();
   safeWriteOrders([order, ...existing]);
 
-  // 2) Firestore 미러링
+  // 2) Firestore 미러링 (있으면 저장)
   (async () => {
-    try {
-      const safeOrder = stripUndefinedDeep({
-        ...order,
-        createdAtTs: serverTimestamp(),
-        updatedAtTs: serverTimestamp(),
-      });
-
-      await setDoc(doc(db, "orders", order.id), safeOrder, { merge: true });
-    } catch (e) {
-      console.error("[Firestore] order mirror failed:", e);
-    }
+    const safeOrder = stripUndefinedDeep({
+      ...order,
+      createdAtTs: serverTimestamp(),
+      updatedAtTs: serverTimestamp(),
+    });
+    await mirrorToFirestore(order.id, safeOrder);
   })();
 
   return order;
@@ -148,19 +158,15 @@ export function updateOrderStatus(orderId: string, status: string) {
 
   safeWriteOrders(list);
 
-  // Firestore에도 반영
+  // Firestore에도 반영 (있으면)
   (async () => {
-    try {
-      const safePatch = stripUndefinedDeep({
-        status,
-        updatedAt: new Date().toISOString(),
-        updatedAtTs: serverTimestamp(),
-      });
+    const safePatch = stripUndefinedDeep({
+      status,
+      updatedAt: new Date().toISOString(),
+      updatedAtTs: serverTimestamp(),
+    });
 
-      await setDoc(doc(db, "orders", orderId), safePatch, { merge: true });
-    } catch (e) {
-      console.error("[Firestore] status update mirror failed:", e);
-    }
+    await mirrorToFirestore(orderId, safePatch);
   })();
 }
 
@@ -191,16 +197,13 @@ export function updateOrderPayment(
   }
 
   (async () => {
-    try {
-      const safePatch = stripUndefinedDeep({
-        ...patch,
-        updatedAt: new Date().toISOString(),
-        updatedAtTs: serverTimestamp(),
-      });
-      await setDoc(doc(db, "orders", orderId), safePatch, { merge: true });
-    } catch (e) {
-      console.error("[Firestore] payment update mirror failed:", e);
-    }
+    const safePatch = stripUndefinedDeep({
+      ...patch,
+      updatedAt: new Date().toISOString(),
+      updatedAtTs: serverTimestamp(),
+    });
+
+    await mirrorToFirestore(orderId, safePatch);
   })();
 }
 

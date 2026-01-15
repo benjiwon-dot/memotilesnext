@@ -1,6 +1,8 @@
 // utils/storageUpload.ts
+"use client";
+
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { storage } from "@/lib/firebase";
+import { getFirebaseClient } from "@/lib/firebase.client";
 
 type EnsureArgs = {
   url: string;      // blob:... or data:... or https:...
@@ -34,6 +36,18 @@ async function urlToBlob(url: string): Promise<Blob> {
 export async function ensureStorageUrl(args: EnsureArgs): Promise<string> {
   const { url, uid, orderId, index } = args;
   if (!url) return "";
+
+  if (typeof window === "undefined") {
+    throw new Error("ensureStorageUrl must run in the browser.");
+  }
+
+  // ✅ storage는 getFirebaseClient()에서 가져온다
+  const { storage } = getFirebaseClient();
+  if (!storage) {
+    throw new Error(
+      "Firebase Storage not configured. Check .env.local (local) / Vercel env (deploy) and restart."
+    );
+  }
 
   const blob = await urlToBlob(url);
 

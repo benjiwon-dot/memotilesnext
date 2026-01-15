@@ -1,3 +1,4 @@
+// context/AppContext.tsx
 "use client";
 
 import React, {
@@ -106,17 +107,19 @@ function sanitizeCartArray(input: any): CartItem[] {
       previewUrl: typeof x.previewUrl === "string" ? x.previewUrl : undefined,
       src: typeof x.src === "string" ? x.src : undefined,
       qty: Number(x.qty) > 0 ? Number(x.qty) : 1,
-      crop: x.crop,
+      crop: (x as any).crop,
     }));
 }
 
+// ✅ 통일된 에러 메시지 (UI에서 catch 해서 보여주기 쉬움)
+const FIREBASE_NOT_CONFIGURED_MSG =
+  "Firebase not configured. Check .env.local (local) or Vercel Environment Variables (deploy), then restart.";
+
 export function AppProvider({ children }: { children: ReactNode }) {
-  /**
-   * ✅ 핵심 수정:
-   * - 기존: useMemo(() => getFirebaseClient(), [])  => env 없으면 "렌더 단계에서" 바로 터짐
-   * - 변경: useEffect에서 try/catch로 가져오고, 없으면 authLoading을 false로 내려서 앱이 안 죽게
-   */
+  // ✅ Firebase 번들 (없으면 null)
   const [fb, setFb] = useState<null | { auth: Auth; db: Firestore }>(null);
+  // ✅ Firebase 초기화 시도 완료 여부 (없어도 완료)
+  const [fbReady, setFbReady] = useState(false);
 
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -133,18 +136,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const isLoggedIn = !!user;
 
+  // ✅ Firebase 초기화: 렌더 단계에서 터뜨리지 않고, 마운트 후 안전하게 처리
   useEffect(() => {
-    // ✅ Firebase는 브라우저에서만 + env 없으면 조용히 비활성화
     try {
       const { auth, db } = getFirebaseClient();
       setFb({ auth, db });
     } catch (e: any) {
-      console.warn(e?.message || e);
+      console.warn("[AppContext] Firebase disabled:", e?.message || e);
       setFb(null);
-      setAuthLoading(false); // firebase 없으면 로그인 기능은 비활성, 앱은 진행
+    } finally {
+      setFbReady(true);
     }
   }, []);
 
+  // ✅ lastEmail restore
   useEffect(() => {
     try {
       const v = localStorage.getItem("MEMOTILES_LAST_EMAIL");
@@ -160,6 +165,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch {}
   }, []);
 
+  // ✅ language restore
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LANG_STORAGE_KEY);
@@ -178,6 +184,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch {}
   }, []);
 
+  // ✅ Google redirect result (Firebase 있을 때만)
   useEffect(() => {
     if (!fb?.auth) return;
 
@@ -189,16 +196,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     })();
   }, [fb?.auth, saveLastEmail]);
 
+  // ✅ Auth state (Firebase 없으면 로딩 종료)
   useEffect(() => {
-    if (!fb?.auth) return;
+    if (!fbReady) return;
+
+    if (!fb?.auth) {
+      // Firebase가 없는 경우: 로그인 기능 비활성, 앱은 계속 진행
+      setUser(null);
+      setAuthLoading(false);
+      return;
+    }
 
     const unsub = onAuthStateChanged(fb.auth, (u) => {
       setUser(u);
       setAuthLoading(false);
     });
-    return () => unsub();
-  }, [fb?.auth]);
 
+    return () => unsub();
+  }, [fbReady, fb?.auth]);
+
+  // ✅ Firestore users upsert (Firebase 있을 때만)
   useEffect(() => {
     const upsertUser = async () => {
       if (!fb?.db) return;
@@ -224,6 +241,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     upsertUser();
   }, [fb?.db, user]);
 
+  // ✅ cart restore (로그인 유저/게스트 모두)
   useEffect(() => {
     if (authLoading) return;
     if (didRestoreCartRef.current) return;
@@ -257,6 +275,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [user?.uid, authLoading]);
 
+  // ✅ cart persist
   useEffect(() => {
     if (authLoading) return;
 
@@ -306,9 +325,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [DEFAULT_NEXT_AFTER_VERIFY]
   );
 
-  const requireAuth = useCallback(() => {
+  const requireAuth = useCallback((): Auth => {
     if (!fb?.auth) {
-      throw new Error("Firebase not configured. Check .env.local and restart dev server.");
+      throw new Error(FIREBASE_NOT_CONFIGURED_MSG);
     }
     return fb.auth;
   }, [fb?.auth]);
@@ -435,18 +454,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       user,
       authLoading,
       isLoggedIn,
+
       loginWithGoogle,
       registerWithEmail,
       loginWithEmail,
       resendVerificationEmail,
       logout,
+
       sendPasswordReset,
       saveLastEmail,
       lastEmail,
+
       requireEmailVerified,
+
       language,
       setLanguage,
       t,
+
       cart,
       setCart,
       upsertCartItem,

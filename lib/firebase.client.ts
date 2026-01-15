@@ -13,50 +13,43 @@ type FirebaseClientBundle = {
   storage: FirebaseStorage;
 };
 
+// ✅ IMPORTANT:
+// - NEXT_PUBLIC_* 는 클라이언트 번들에 "빌드 타임"에 주입됨
+// - 그래서 함수 안에서 process.env를 읽고 throw 하는 방식이 꼬일 수 있음
+// - 파일 최상단에서 "한 번" 읽어 config를 만들고, 없으면 null 처리
+const firebaseConfig =
+  process.env.NEXT_PUBLIC_FIREBASE_API_KEY &&
+  process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN &&
+  process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID &&
+  process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET &&
+  process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID &&
+  process.env.NEXT_PUBLIC_FIREBASE_APP_ID
+    ? {
+        apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+        authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+        storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+        messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+        appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+      }
+    : null;
+
 let cached: FirebaseClientBundle | null = null;
-let warnedMissingEnv = false;
-
-function readEnv(name: string): string | null {
-  const v = process.env[name as keyof NodeJS.ProcessEnv];
-  const s = typeof v === "string" ? v.trim() : "";
-  return s.length ? s : null;
-}
-
-function getFirebaseConfigOrNull() {
-  const apiKey = readEnv("NEXT_PUBLIC_FIREBASE_API_KEY");
-  const authDomain = readEnv("NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN");
-  const projectId = readEnv("NEXT_PUBLIC_FIREBASE_PROJECT_ID");
-  const storageBucket = readEnv("NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET");
-  const messagingSenderId = readEnv("NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID");
-  const appId = readEnv("NEXT_PUBLIC_FIREBASE_APP_ID");
-
-  // 하나라도 없으면 null (앱 자체는 죽이지 않음)
-  if (!apiKey || !authDomain || !projectId || !storageBucket || !messagingSenderId || !appId) {
-    if (!warnedMissingEnv) {
-      warnedMissingEnv = true;
-      console.warn(
-        "[firebase] Missing NEXT_PUBLIC_FIREBASE_* env. Firebase features disabled on this page load."
-      );
-    }
-    return null;
-  }
-
-  return { apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId };
-}
 
 export function getFirebaseClient(): FirebaseClientBundle {
   if (typeof window === "undefined") {
     throw new Error("getFirebaseClient() must be called in the browser.");
   }
-  if (cached) return cached;
 
-  const config = getFirebaseConfigOrNull();
-  if (!config) {
-    // ✅ 앱을 죽이지 않고, 호출한 쪽에서 try/catch로 처리할 수 있게 에러 메시지는 명확히
-    throw new Error("[firebase] Config missing. Check .env.local and restart dev server.");
+  if (!firebaseConfig) {
+    // ✅ 여기서는 '친절한 에러'만 던지고 앱 전체를 죽이지 않게
+    // (AppContext에서 try/catch로 핸들링 가능)
+    throw new Error("Firebase not configured. Check .env.local and restart dev server.");
   }
 
-  const app = getApps().length ? getApp() : initializeApp(config);
+  if (cached) return cached;
+
+  const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db = getFirestore(app);
   const storage = getStorage(app);
