@@ -1,5 +1,3 @@
-// context/AppContext.tsx  ✅ 통코드 (그대로 교체 OK)
-
 "use client";
 
 import React, {
@@ -27,10 +25,11 @@ import {
   updateProfile,
   reload,
   sendPasswordResetEmail,
+  type Auth,
 } from "firebase/auth";
 
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
-import { auth, db } from "@/lib/firebase";
+import { doc, serverTimestamp, setDoc, type Firestore } from "firebase/firestore";
+import { getFirebaseClient } from "@/lib/firebase.client";
 import { translations } from "@/utils/translations";
 
 type Language = "TH" | "EN";
@@ -112,6 +111,13 @@ function sanitizeCartArray(input: any): CartItem[] {
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  /**
+   * ✅ 핵심 수정:
+   * - 기존: useMemo(() => getFirebaseClient(), [])  => env 없으면 "렌더 단계에서" 바로 터짐
+   * - 변경: useEffect에서 try/catch로 가져오고, 없으면 authLoading을 false로 내려서 앱이 안 죽게
+   */
+  const [fb, setFb] = useState<null | { auth: Auth; db: Firestore }>(null);
+
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
@@ -126,6 +132,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const didRestoreCartRef = useRef(false);
 
   const isLoggedIn = !!user;
+
+  useEffect(() => {
+    // ✅ Firebase는 브라우저에서만 + env 없으면 조용히 비활성화
+    try {
+      const { auth, db } = getFirebaseClient();
+      setFb({ auth, db });
+    } catch (e: any) {
+      console.warn(e?.message || e);
+      setFb(null);
+      setAuthLoading(false); // firebase 없으면 로그인 기능은 비활성, 앱은 진행
+    }
+  }, []);
 
   useEffect(() => {
     try {
@@ -161,40 +179,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!fb?.auth) return;
+
     (async () => {
       try {
-        const result = await getRedirectResult(auth);
+        const result = await getRedirectResult(fb.auth);
         if (result?.user?.email) saveLastEmail(result.user.email);
       } catch {}
     })();
-  }, [saveLastEmail]);
+  }, [fb?.auth, saveLastEmail]);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
+    if (!fb?.auth) return;
+
+    const unsub = onAuthStateChanged(fb.auth, (u) => {
       setUser(u);
       setAuthLoading(false);
     });
     return () => unsub();
-  }, []);
+  }, [fb?.auth]);
 
-  /**
-   * ✅ Firestore users upsert (Rules에 맞춰 "허용 필드만" 저장)
-   * - Rules:
-   *   - create: role 금지
-   *   - update: displayName/email/photoURL/updatedAt/updatedAtTs 만 허용, role 금지
-   */
   useEffect(() => {
     const upsertUser = async () => {
+      if (!fb?.db) return;
       if (!user) return;
 
       try {
         await setDoc(
-          doc(db, "users", user.uid),
+          doc(fb.db, "users", user.uid),
           {
             displayName: user.displayName ?? "",
             email: user.email ?? "",
             photoURL: user.photoURL ?? "",
-
             updatedAt: new Date().toISOString(),
             updatedAtTs: serverTimestamp(),
           },
@@ -206,7 +222,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
 
     upsertUser();
-  }, [user]);
+  }, [fb?.db, user]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -290,8 +306,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [DEFAULT_NEXT_AFTER_VERIFY]
   );
 
+  const requireAuth = useCallback(() => {
+    if (!fb?.auth) {
+      throw new Error("Firebase not configured. Check .env.local and restart dev server.");
+    }
+    return fb.auth;
+  }, [fb?.auth]);
+
   const loginWithGoogle = useCallback(async () => {
+    const auth = requireAuth();
     const provider = new GoogleAuthProvider();
+
     try {
       const cred = await signInWithPopup(auth, provider);
       if (cred.user?.email) saveLastEmail(cred.user.email);
@@ -309,10 +334,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       throw e;
     }
-  }, [saveLastEmail]);
+  }, [requireAuth, saveLastEmail]);
 
   const registerWithEmail = useCallback(
     async (email: string, password: string, fullName: string) => {
+      const auth = requireAuth();
+
       const cleanedEmail = (email || "").trim().toLowerCase();
       const cred = await createUserWithEmailAndPassword(auth, cleanedEmail, password);
 
@@ -328,11 +355,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (cred.user?.email) saveLastEmail(cred.user.email);
       return cred.user;
     },
-    [buildVerifyReturnUrl, saveLastEmail]
+    [requireAuth, buildVerifyReturnUrl, saveLastEmail]
   );
 
   const loginWithEmail = useCallback(
     async (email: string, password: string) => {
+      const auth = requireAuth();
+
       const cleanedEmail = (email || "").trim().toLowerCase();
       const cred = await signInWithEmailAndPassword(auth, cleanedEmail, password);
 
@@ -350,11 +379,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (cred.user?.email) saveLastEmail(cred.user.email);
       return cred.user;
     },
-    [requireEmailVerified, saveLastEmail]
+    [requireAuth, requireEmailVerified, saveLastEmail]
   );
 
   const resendVerificationEmail = useCallback(
     async (nextPath?: string) => {
+      const auth = requireAuth();
       if (!auth.currentUser) return;
 
       await sendEmailVerification(auth.currentUser, {
@@ -362,11 +392,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         handleCodeInApp: false,
       });
     },
-    [buildVerifyReturnUrl]
+    [requireAuth, buildVerifyReturnUrl]
   );
 
   const sendPasswordReset = useCallback(
     async (email: string) => {
+      const auth = requireAuth();
+
       const cleaned = (email || "").trim().toLowerCase();
       if (!cleaned) throw new Error("Email is required.");
 
@@ -380,12 +412,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       await sendPasswordResetEmail(auth, cleaned, actionCodeSettings);
     },
-    [saveLastEmail]
+    [requireAuth, saveLastEmail]
   );
 
   const logout = useCallback(async () => {
+    const auth = requireAuth();
     await signOut(auth);
-  }, []);
+  }, [requireAuth]);
 
   const t = useCallback(
     (key: string) => {
@@ -401,25 +434,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       authLoading,
-
       isLoggedIn,
-
       loginWithGoogle,
       registerWithEmail,
       loginWithEmail,
       resendVerificationEmail,
       logout,
-
       sendPasswordReset,
       saveLastEmail,
       lastEmail,
-
       requireEmailVerified,
-
       language,
       setLanguage,
       t,
-
       cart,
       setCart,
       upsertCartItem,

@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import AppLayout from "@/components/AppLayout";
 import { useApp } from "@/context/AppContext";
-import { auth } from "@/lib/firebase";
+import { getFirebaseClient } from "@/lib/firebase.client";
 import { reload, sendEmailVerification } from "firebase/auth";
 
 function formatT(template: string, params: Record<string, string>) {
@@ -16,6 +16,9 @@ export default function VerifyEmailClient() {
   const sp = useSearchParams();
   const next = sp.get("next") || "/editor";
 
+  // ✅ auth를 직접 import하지 말고, 클라이언트에서만 가져오기
+  const { auth } = useMemo(() => getFirebaseClient(), []);
+
   const app = useApp() as any;
   const t = (app?.t as (key: string) => string) || ((k: string) => k);
 
@@ -25,14 +28,18 @@ export default function VerifyEmailClient() {
   const [checking, setChecking] = useState(false);
   const [msg, setMsg] = useState<string>("");
 
+  const goLoginWithReturn = useMemo(() => {
+    // verify-email로 다시 돌아오게 next를 중첩 인코딩
+    const back = `/verify-email?next=${encodeURIComponent(next)}`;
+    return `/login?next=${encodeURIComponent(back)}`;
+  }, [next]);
+
   useEffect(() => {
     if (authLoading) return;
 
     // 로그인 세션 없으면 로그인으로
     if (!user) {
-      router.replace(
-        `/login?next=${encodeURIComponent(`/verify-email?next=${encodeURIComponent(next)}`)}`
-      );
+      router.replace(goLoginWithReturn);
       return;
     }
 
@@ -43,7 +50,7 @@ export default function VerifyEmailClient() {
     }
 
     setMsg(t("verifyHintBox"));
-  }, [authLoading, user, router, next, t]);
+  }, [authLoading, user, router, next, t, goLoginWithReturn]);
 
   const resend = async () => {
     try {
@@ -51,9 +58,7 @@ export default function VerifyEmailClient() {
       setMsg("");
 
       if (!auth.currentUser) {
-        router.replace(
-          `/login?next=${encodeURIComponent(`/verify-email?next=${encodeURIComponent(next)}`)}`
-        );
+        router.replace(goLoginWithReturn);
         return;
       }
 
@@ -72,9 +77,7 @@ export default function VerifyEmailClient() {
       setMsg("");
 
       if (!auth.currentUser) {
-        router.replace(
-          `/login?next=${encodeURIComponent(`/verify-email?next=${encodeURIComponent(next)}`)}`
-        );
+        router.replace(goLoginWithReturn);
         return;
       }
 

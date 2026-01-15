@@ -1,4 +1,7 @@
+// app/about/page.tsx
 "use client";
+
+export const dynamic = "force-dynamic";
 
 import React, { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -75,7 +78,9 @@ export default function AboutPage() {
   const { t } = useApp();
 
   const handleCreateClick = () => {
-    router.push("/app"); // 기존 navigate('/app')
+    // ✅ 기존 "/app"은 프로젝트 구조상 404 나기 쉬움
+    // ✅ editor가 업로드/크롭 시작점이면 여기로
+    router.push("/editor");
   };
 
   const sectionStyle: React.CSSProperties = {
@@ -149,13 +154,15 @@ export default function AboutPage() {
           </div>
         </section>
 
-        {/* Section 2: Designed for meaningful images */}
+        {/* Section 2 */}
         <section style={{ ...sectionStyle, backgroundColor: "#F9FAFB" }}>
           <div style={contentBoxStyle}>
             <FadeInSection animation="slide-up">
               <h2 style={headlineStyle}>{t("aboutSection2Title")}</h2>
               <p style={bodyStyle}>{t("aboutSection2Body")}</p>
-              <p style={{ fontSize: "0.75rem", color: "#9CA3AF", marginTop: "1.5rem" }}>{t("aboutNote")}</p>
+              <p style={{ fontSize: "0.75rem", color: "#9CA3AF", marginTop: "1.5rem" }}>
+                {t("aboutNote")}
+              </p>
             </FadeInSection>
 
             <FadeInSection animation="slide-up" delay={0.2}>
@@ -171,7 +178,7 @@ export default function AboutPage() {
           </div>
         </section>
 
-        {/* Section 3: Effortless & flexible */}
+        {/* Section 3 */}
         <section style={sectionStyle}>
           <div style={contentBoxStyle}>
             <FadeInSection animation="scale">
@@ -223,7 +230,7 @@ export default function AboutPage() {
           </div>
         </section>
 
-        {/* Section 4: More than interior — a thoughtful gift */}
+        {/* Section 4 */}
         <section style={{ ...sectionStyle, backgroundColor: "#FFFBF7" }}>
           <div style={contentBoxStyle}>
             <FadeInSection animation="fade-up">
@@ -234,13 +241,17 @@ export default function AboutPage() {
             <FadeInSection animation="fade-up" delay={0.2}>
               <div style={{ ...imageContainerStyle, maxWidth: "500px" }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/assets/about/gift.png" alt="Memotile Gift" style={{ width: "100%", display: "block" }} />
+                <img
+                  src="/assets/about/gift.png"
+                  alt="Memotile Gift"
+                  style={{ width: "100%", display: "block" }}
+                />
               </div>
             </FadeInSection>
           </div>
         </section>
 
-        {/* Section 5: Closing belief + CTA */}
+        {/* Section 5 */}
         <section style={sectionStyle}>
           <div style={contentBoxStyle}>
             <FadeInSection animation="fade-up">
