@@ -31,13 +31,25 @@ type ShippingAddress = {
 };
 
 const SESSION_KEY = "MYTILE_ORDER_ITEMS";
+const CART_STORAGE_PREFIX = "MEMOTILES_CART_V1";
+
+function cartStorageKey(uid?: string | null) {
+  return `${CART_STORAGE_PREFIX}:${uid || "guest"}`;
+}
 
 function safeParseItems(raw: string | null): OrderItem[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((x) => x && typeof x.id === "string");
+    return parsed
+      .filter((x) => x && typeof x.id === "string")
+      .map((x) => ({
+        id: String(x.id),
+        previewUrl: typeof x.previewUrl === "string" ? x.previewUrl : undefined,
+        src: typeof x.src === "string" ? x.src : undefined,
+        qty: Number(x.qty) > 0 ? Number(x.qty) : 1,
+      }));
   } catch {
     return [];
   }
@@ -102,27 +114,47 @@ export default function CheckoutClient() {
   const cartFromCtx: OrderItem[] = (app?.cart || []) as OrderItem[];
   const [hydrating, setHydrating] = useState(true);
 
+  // ✅ 핵심: Checkout에서 직접 storage 복원까지 한다 (Vercel/라우팅/리셋에도 안 꼬임)
   useEffect(() => {
     if (app?.authLoading) return;
 
+    const uid = app?.user?.uid as string | undefined;
+
+    // 1) Context cart 있으면 끝
     if (Array.isArray(cartFromCtx) && cartFromCtx.length > 0) {
       setHydrating(false);
       return;
     }
 
     try {
-      const raw = sessionStorage.getItem(SESSION_KEY);
-      const sessionItems = safeParseItems(raw);
+      // 2) sessionStorage (Editor가 저장)
+      const sessionRaw = sessionStorage.getItem(SESSION_KEY);
+      const sessionItems = safeParseItems(sessionRaw);
 
-      if (sessionItems.length > 0 && typeof app?.setCart === "function") {
-        app.setCart(
-          sessionItems.map((it) => ({
-            id: it.id,
-            previewUrl: it.previewUrl,
-            src: it.src,
-            qty: it.qty ?? 1,
-          }))
-        );
+      if (sessionItems.length > 0) {
+        if (typeof app?.setCart === "function") app.setCart(sessionItems);
+        setHydrating(false);
+        return;
+      }
+
+      // 3) localStorage (AppContext persist)
+      const uidRaw = localStorage.getItem(cartStorageKey(uid));
+      const uidItems = safeParseItems(uidRaw);
+
+      if (uidItems.length > 0) {
+        if (typeof app?.setCart === "function") app.setCart(uidItems);
+        setHydrating(false);
+        return;
+      }
+
+      // 4) guest fallback
+      const guestRaw = localStorage.getItem(cartStorageKey("guest"));
+      const guestItems = safeParseItems(guestRaw);
+
+      if (guestItems.length > 0) {
+        if (typeof app?.setCart === "function") app.setCart(guestItems);
+        setHydrating(false);
+        return;
       }
     } catch {
       // ignore
@@ -154,13 +186,9 @@ export default function CheckoutClient() {
     return Array.isArray(cart) ? cart.reduce((sum, it) => sum + (Number(it.qty) || 1), 0) : 0;
   }, [cart]);
 
-  // ✅ 화면 표시용 (THB)
-  const totalTHB = useMemo(() => tilesCount * 200, [tilesCount]); // 200 THB / tile
-
-  // ✅ 토스 결제 요청용 (KRW) — 테스트용 환산(임의)
-  // 나중에 정책 정해지면 여기만 바꾸면 됨
+  const totalTHB = useMemo(() => tilesCount * 200, [tilesCount]);
   const totalKRW = useMemo(() => {
-    const v = Math.round(tilesCount * 2000); // 예: 1장 = 2,000원
+    const v = Math.round(tilesCount * 2000);
     return Number.isFinite(v) && v > 0 ? v : 0;
   }, [tilesCount]);
 
@@ -179,13 +207,9 @@ export default function CheckoutClient() {
     if (!/^\S+@\S+\.\S+$/.test(email)) return alert(tr("emailInvalid", "Please enter a valid email address."));
 
     const tossClientKey = process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY;
-    if (!tossClientKey) {
-      return alert("Missing NEXT_PUBLIC_TOSS_CLIENT_KEY in .env.local");
-    }
+    if (!tossClientKey) return alert("Missing NEXT_PUBLIC_TOSS_CLIENT_KEY in Vercel env");
 
-    if (!Number.isFinite(totalKRW) || totalKRW <= 0) {
-      return alert("Invalid payment amount.");
-    }
+    if (!Number.isFinite(totalKRW) || totalKRW <= 0) return alert("Invalid payment amount.");
 
     setBusy(true);
     setStepLabel("");
@@ -220,12 +244,12 @@ export default function CheckoutClient() {
         });
       }
 
-      // 2) 주문 생성(결제 전) — DB에는 THB 기준으로 저장(너 기존 UX 유지)
+      // 2) 주문 생성(결제 전)
       setStepLabel(tr("creatingOrder", "Creating order…"));
 
       const order = createOrder(uid, {
         items: uploadedItems,
-        total: totalTHB,          // ✅ 표시/주문 기준 THB 유지
+        total: totalTHB,
         currency: "THB",
         shippingAddress: cleanedShipping,
         status: "payment_pending",
@@ -233,7 +257,7 @@ export default function CheckoutClient() {
         paymentProvider: "toss",
       } as any);
 
-      // 3) Toss 결제창 오픈 (v2)
+      // 3) Toss 결제창 오픈
       setStepLabel(tr("openingPayment", "Opening secure payment…"));
 
       await loadTossPaymentsScript();
@@ -243,19 +267,17 @@ export default function CheckoutClient() {
       const tossPayments = window.TossPayments(tossClientKey);
       const payment = tossPayments.payment({ customerKey: uid });
 
-      if (typeof app?.setCart === "function") app.setCart([]);
+      // ✅ 결제 성공/실패와 별개로, 여기서 cart 비우면 실패시 복구가 귀찮다.
+      // 일단 주석 처리하고 success에서 clear하는 게 안전.
+      // if (typeof app?.setCart === "function") app.setCart([]);
 
       await payment.requestPayment({
         method: "CARD",
-
-        // ✅ 핵심: Toss는 KRW 통화로 보내야 함
         amount: { currency: "KRW", value: totalKRW },
-
         orderId: publicOrderId,
         orderName: `MEMOTILE ${tilesCount} tiles`,
         customerName: cleanedShipping.fullName || "Customer",
         customerEmail: email,
-
         successUrl: `${origin}/toss/success?docId=${encodeURIComponent(order.id)}`,
         failUrl: `${origin}/toss/fail?docId=${encodeURIComponent(order.id)}`,
       });
@@ -306,7 +328,6 @@ export default function CheckoutClient() {
         </h1>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 420px", gap: "4rem", alignItems: "start" }}>
-          {/* Left: Shipping */}
           <div>
             <h2 style={{ fontSize: "1.25rem", fontWeight: 800, marginBottom: "1.5rem" }}>
               {tr("shippingAddress", "Shipping address")}
@@ -434,7 +455,6 @@ export default function CheckoutClient() {
             </form>
           </div>
 
-          {/* Right: Summary */}
           <div>
             <div className="card" style={{ position: "sticky", top: "100px" }}>
               <h3 style={{ fontSize: "1.25rem", fontWeight: 950, marginBottom: "1rem" }}>
@@ -467,7 +487,6 @@ export default function CheckoutClient() {
                     }}
                   >
                     {item.previewUrl || item.src ? (
-                      // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={(item.previewUrl || item.src) as string}
                         alt="tile"
@@ -531,7 +550,6 @@ export default function CheckoutClient() {
                 {tr("currencyNote", "Currency: THB • Visa / Mastercard / JCB • Bank app confirmation may be required")}
               </div>
 
-              {/* ✅ 디버그용(원하면 나중에 지워도 됨): 토스 결제 요청 금액 */}
               <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-tertiary)" }}>
                 Toss charge (test): ₩{totalKRW}
               </div>

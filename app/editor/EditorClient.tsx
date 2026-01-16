@@ -35,18 +35,21 @@ type UploadItem = {
 };
 
 type CropState = {
-  zoom: number; // 1 ~ 3
-  dragPos: { x: number; y: number }; // ✅ frame(px) 기준 이동량
+  zoom: number;
+  dragPos: { x: number; y: number };
   filter: string;
 };
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
-
 type ImgMeta = { w: number; h: number };
 
 const EDITOR_STATE_KEY = "MYTILE_EDITOR_STATE";
-const ORDER_ITEMS_KEY = "MYTILE_ORDER_ITEMS";
+const ORDER_ITEMS_KEY = "MYTILE_ORDER_ITEMS"; // ✅ AppContext SESSION_CART_KEY와 동일
 const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15MB
+
+// ✅ ADD: AppContext cart persist key와 동일한 prefix를 사용 (guest 키 직접 저장해 안정성 강화)
+const CART_STORAGE_PREFIX = "MEMOTILES_CART_V1";
+const cartStorageKey = (uid?: string | null) => `${CART_STORAGE_PREFIX}:${uid || "guest"}`;
 
 export default function EditorPage() {
   const app = useApp() as any;
@@ -79,7 +82,6 @@ export default function EditorPage() {
   const [crops, setCrops] = useState<Record<string, CropState>>({});
   const [saveStatuses, setSaveStatuses] = useState<Record<string, SaveStatus>>({});
 
-  // ✅ 업로드 직후부터 "cover 기준"으로 정확히 렌더링/클램프하기 위한 메타
   const [imgMetaMap, setImgMetaMap] = useState<Record<string, ImgMeta>>({});
   const imgMetaRef = useRef<Record<string, ImgMeta>>({});
   useEffect(() => {
@@ -100,28 +102,22 @@ export default function EditorPage() {
     tr("errorLoadingPhoto", "Unsupported file type or file too large.")
   );
 
-  // ✅ cropper frame size를 얻기 위한 ref
   const frameRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ hidden file input (하나만)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pendingTargetIdRef = useRef<string | null>(null);
 
-  // ✅ file picker 중복 오픈 방지
   const isFilePickerOpeningRef = useRef(false);
   const lastPickerOpenAtRef = useRef(0);
 
-  // ✅ objectURL 관리
-  const objectUrlMapRef = useRef<Record<string, string>>({}); // id -> objectURL
+  const objectUrlMapRef = useRef<Record<string, string>>({});
 
-  // ✅ drag state
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const preventClickUntilRef = useRef(0);
   const didPointerDownRef = useRef(false);
   const movedEnoughRef = useRef(false);
 
-  // ✅ stale 방지 refs
   const uploadsRef = useRef<UploadItem[]>(uploads);
   useEffect(() => {
     uploadsRef.current = uploads;
@@ -137,7 +133,6 @@ export default function EditorPage() {
     saveStatusesRef.current = saveStatuses;
   }, [saveStatuses]);
 
-  // ✅ 타이머 유틸
   const timeoutsRef = useRef<number[]>([]);
   const setSafeTimeout = (fn: () => void, ms: number) => {
     const id = window.setTimeout(fn, ms);
@@ -145,7 +140,6 @@ export default function EditorPage() {
     return id;
   };
 
-  // ✅ cleanup + objectURL revoke
   useEffect(() => {
     return () => {
       timeoutsRef.current.forEach((id) => window.clearTimeout(id));
@@ -160,7 +154,6 @@ export default function EditorPage() {
     };
   }, []);
 
-  // ✅ 파일 다이얼로그 Cancel 시 lock 해제
   useEffect(() => {
     const onFocus = () => {
       window.setTimeout(() => {
@@ -171,7 +164,6 @@ export default function EditorPage() {
     return () => window.removeEventListener("focus", onFocus);
   }, []);
 
-  // ✅ frame size 실시간 측정(ResizeObserver)
   useEffect(() => {
     if (!frameRef.current) return;
 
@@ -281,7 +273,6 @@ export default function EditorPage() {
     setSelectedUploadId(firstId);
   }, [editOrderId, router]);
 
-  // Dev toggle
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -316,7 +307,6 @@ export default function EditorPage() {
     hasPhoto && !isUploading && !isLoadingImage && labState.interactionState !== "disabled";
   const interactionsDisabled = !canInteractWithImage;
 
-  // ✅ "사진 있는 슬롯"만 대상으로 allSaved 판단
   const photos = useMemo(() => uploads.filter((u) => !!u.src), [uploads]);
   const savedCount = useMemo(() => photos.filter((u) => saveStatuses[u.id] === "saved").length, [photos, saveStatuses]);
   const allPhotosSaved = useMemo(() => photos.length > 0 && photos.every((u) => saveStatuses[u.id] === "saved"), [photos, saveStatuses]);
@@ -325,12 +315,11 @@ export default function EditorPage() {
     !allPhotosSaved || isLoadingImage || labState.checkoutState === "disabled" || isNavigating;
 
   // ---------------------------
-  // ✅ cover 기반 실제 clamp (Mixtiles처럼 "원본 끝까지" 이동 가능)
+  // ✅ cover 기반 실제 clamp
   // ---------------------------
   const getCoverSizePx = (imgMeta?: ImgMeta) => {
     const size = frameSize || 480;
     if (!imgMeta || !imgMeta.w || !imgMeta.h) {
-      // 메타 없으면 fallback: frame 기준(기존처럼 보수적으로)
       return { w: size, h: size, baseScale: 1 };
     }
     const baseScale = Math.max(size / imgMeta.w, size / imgMeta.h);
@@ -343,11 +332,9 @@ export default function EditorPage() {
     const meta = imgMetaRef.current[id];
     const cover = getCoverSizePx(meta);
 
-    // zoom 적용 후 실제 렌더링 크기
     const zw = cover.w * (zoom || 1);
     const zh = cover.h * (zoom || 1);
 
-    // 프레임보다 큰 만큼만 이동 허용 (빈 공간 방지)
     const maxX = Math.max(0, (zw - size) / 2);
     const maxY = Math.max(0, (zh - size) / 2);
 
@@ -363,12 +350,9 @@ export default function EditorPage() {
       const base = prev[selectedUploadId] || currentCrop;
       const next = { ...base, ...updates };
 
-      // drag 변경 시 clamp
       if (updates.dragPos) {
         next.dragPos = clampDrag(selectedUploadId, updates.dragPos, next.zoom);
       }
-
-      // zoom 변경 시에도 clamp(현재 drag 유지하되 범위 재계산)
       if (typeof updates.zoom === "number") {
         next.dragPos = clampDrag(selectedUploadId, next.dragPos, next.zoom);
       }
@@ -428,7 +412,6 @@ export default function EditorPage() {
     }
     objectUrlMapRef.current[slotId] = nextUrl;
 
-    // ✅ 업로드 초기 crop: "가운데 기준"
     setUploads((prev) =>
       prev.map((u) =>
         u.id === slotId
@@ -444,7 +427,6 @@ export default function EditorPage() {
       )
     );
 
-    // ✅ 메타는 새로 로드될 때 다시 채움
     setImgMetaMap((prev) => {
       const next = { ...prev };
       delete next[slotId];
@@ -546,7 +528,7 @@ export default function EditorPage() {
   };
 
   // ---------------------------
-  // ✅ "보이는 그대로" 캔버스에 렌더링 (좌표계 정확히 맞춤)
+  // ✅ 캔버스 렌더링
   // ---------------------------
   const createCroppedPreviewDataUrl = async (src: string, crop: CropState): Promise<string> => {
     const SIZE = 640;
@@ -570,28 +552,22 @@ export default function EditorPage() {
     const iw = img.naturalWidth || img.width;
     const ih = img.naturalHeight || img.height;
 
-    // ✅ cover(가운데 정렬) 기본 스케일
     const baseScale = Math.max(SIZE / iw, SIZE / ih);
-
-    // ✅ 최종 스케일 = cover * zoom
     const scale = baseScale * (crop.zoom || 1);
 
     const drawW = iw * scale;
     const drawH = ih * scale;
 
-    // ✅ drag(px)는 frame 기준 → canvas 기준으로 변환
     const toCanvas = SIZE / (frameSize || 480);
     const dx = (crop.dragPos?.x || 0) * toCanvas;
     const dy = (crop.dragPos?.y || 0) * toCanvas;
 
-    // ✅ "가운데 기준" 배치
     const centerX = SIZE / 2 + dx;
     const centerY = SIZE / 2 + dy;
 
     const drawX = centerX - drawW / 2;
     const drawY = centerY - drawH / 2;
 
-    // background
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, SIZE, SIZE);
 
@@ -600,7 +576,6 @@ export default function EditorPage() {
     return canvas.toDataURL("image/jpeg", 0.92);
   };
 
-  // --- HANDLERS ---
   const handleSaveCrop = () => {
     if (!hasPhoto || interactionsDisabled || currentSaveStatus === "saving" || !selectedUploadId) return;
 
@@ -640,6 +615,7 @@ export default function EditorPage() {
               filter: cropsRef.current[x.id]?.filter,
               qty: 1,
             }));
+          // ✅ AppContext가 읽는 키와 동일
           sessionStorage.setItem(ORDER_ITEMS_KEY, JSON.stringify(orderItems));
         } catch {}
       } catch {
@@ -647,6 +623,25 @@ export default function EditorPage() {
         setSafeTimeout(() => setSaveStatuses((prev) => ({ ...prev, [savingId]: "idle" })), 1200);
       }
     }, 80);
+  };
+
+  // ✅ ADD: checkout으로 넘어가기 직전에 cart를 “AppContext + session + local(guest)” 3군데에 저장
+  const persistCartForCheckout = (orderItems: any[]) => {
+    try {
+      sessionStorage.setItem(ORDER_ITEMS_KEY, JSON.stringify(orderItems));
+    } catch {}
+
+    // AppContext cart set (persist는 AppContext가 알아서 함)
+    if (typeof setCart === "function") {
+      setCart(orderItems);
+    }
+
+    // ✅ extra safety: 게스트 키에 직접 저장 (배포/새탭/새로고침에서 cart empty 방지)
+    try {
+      const uid = app?.user?.uid as string | undefined;
+      const key = cartStorageKey(uid);
+      localStorage.setItem(key, JSON.stringify(orderItems));
+    } catch {}
   };
 
   const handleContinueToCheckout = () => {
@@ -697,11 +692,8 @@ export default function EditorPage() {
           filter: crops[u.id]?.filter,
         }));
 
-      sessionStorage.setItem(ORDER_ITEMS_KEY, JSON.stringify(orderItems));
-
-      if (typeof setCart === "function") {
-        setCart(orderItems);
-      }
+      // ✅ ADD: 여기서 3중 저장(세션 + context + local)
+      persistCartForCheckout(orderItems);
 
       router.push("/checkout");
     }, 250);
@@ -758,7 +750,6 @@ export default function EditorPage() {
     }
   };
 
-  // ✅ 선택된 이미지의 cover 렌더 사이즈(프레임 px 기준)
   const selectedMeta = selectedUploadId ? imgMetaMap[selectedUploadId] : undefined;
   const coverPx = getCoverSizePx(selectedMeta);
 
