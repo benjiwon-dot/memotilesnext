@@ -1,72 +1,117 @@
 // utils/storageUpload.ts
 "use client";
 
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { getFirebaseClient } from "@/lib/firebase.client";
+import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getApps } from "firebase/app";
+import { getApp } from "firebase/app";
 
-type EnsureArgs = {
-  url: string;      // blob:... or data:... or https:...
+// ⚠️ 네 프로젝트 구조에 따라 firebase app init이 이미 되어있으면 이대로 OK.
+// 만약 lib/firebase.ts에서 storage export 중이면 그걸 쓰는 게 더 좋음.
+function getFirebaseStorageSafe() {
+  // initializeApp이 이미 되어있다는 전제(네 앱은 이미 auth/firestore 쓰고 있음)
+  const app = getApps().length ? getApp() : undefined;
+  return getStorage(app);
+}
+
+type EnsureStorageUrlArgs = {
   uid: string;
-  orderId: string;  // public order id like ORD-...
-  index: number;    // 0,1,2...
+  orderId: string;
+  index: number;
+
+  // ✅ NEW: 원본 파일 업로드
+  file?: File;
+  fileName?: string;
+
+  // ✅ fallback: 기존 로직 호환
+  url?: string; // dataURL or http(s) or objectURL
 };
 
+// dataURL -> Blob
 function dataUrlToBlob(dataUrl: string): Blob {
-  const [header, base64] = dataUrl.split(",");
-  const mimeMatch = header.match(/data:(.*?);base64/);
-  const mime = mimeMatch?.[1] || "application/octet-stream";
-  const bytes = atob(base64);
-  const arr = new Uint8Array(bytes.length);
-  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-  return new Blob([arr], { type: mime });
+  const [meta, data] = dataUrl.split(",");
+  const mime = (meta.match(/data:(.*?);base64/) || [])[1] || "application/octet-stream";
+  const binStr = atob(data);
+  const len = binStr.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binStr.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
 }
 
+// url(objectURL/http/data) -> Blob
 async function urlToBlob(url: string): Promise<Blob> {
-  if (url.startsWith("blob:")) {
-    const r = await fetch(url);
-    return await r.blob();
-  }
-  if (url.startsWith("data:")) {
-    return dataUrlToBlob(url);
-  }
-  const r = await fetch(url);
-  return await r.blob();
+  if (!url) throw new Error("Missing url");
+  if (url.startsWith("data:")) return dataUrlToBlob(url);
+
+  // objectURL or http(s)
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
+  return await res.blob();
 }
 
-export async function ensureStorageUrl(args: EnsureArgs): Promise<string> {
-  const { url, uid, orderId, index } = args;
-  if (!url) return "";
+function extFromMimeOrName(mime?: string, name?: string) {
+  const n = (name || "").toLowerCase();
+  if (n.endsWith(".png")) return "png";
+  if (n.endsWith(".webp")) return "webp";
+  if (n.endsWith(".jpg") || n.endsWith(".jpeg")) return "jpg";
 
-  if (typeof window === "undefined") {
-    throw new Error("ensureStorageUrl must run in the browser.");
+  const m = (mime || "").toLowerCase();
+  if (m.includes("png")) return "png";
+  if (m.includes("webp")) return "webp";
+  if (m.includes("jpeg") || m.includes("jpg")) return "jpg";
+  return "jpg";
+}
+
+export async function ensureStorageUrl(args: EnsureStorageUrlArgs): Promise<string> {
+  const { uid, orderId, index, file, fileName, url } = args;
+
+  const storage = getFirebaseStorageSafe();
+
+  // ✅ 파일명/확장자
+  const chosenExt = extFromMimeOrName(file?.type, fileName);
+  const safeNameBase = (fileName || `photo_${String(index).padStart(2, "0")}`).replace(/[\\/:*?"<>|]/g, "_");
+  const objectName = safeNameBase.toLowerCase().endsWith(`.${chosenExt}`)
+    ? safeNameBase
+    : `${safeNameBase}.${chosenExt}`;
+
+  // ✅ 저장 경로 (네가 firebase console에서 본 경로 패턴과 동일하게 유지 가능)
+  const path = `orders/${uid}/${orderId}/${objectName}`;
+
+  const storageRef = ref(storage, path);
+
+  // 1) 원본 file 우선 업로드
+  if (file instanceof File) {
+    const contentType = file.type || (chosenExt === "png" ? "image/png" : chosenExt === "webp" ? "image/webp" : "image/jpeg");
+    await uploadBytes(storageRef, file, {
+      contentType,
+      cacheControl: "public,max-age=31536000,immutable",
+    });
+    return await getDownloadURL(storageRef);
   }
 
-  // ✅ storage는 getFirebaseClient()에서 가져온다
-  const { storage } = getFirebaseClient();
-  if (!storage) {
-    throw new Error(
-      "Firebase Storage not configured. Check .env.local (local) / Vercel env (deploy) and restart."
+  // 2) fallback: 기존 url 기반 업로드
+  const fallbackUrl = (url || "").trim();
+  if (!fallbackUrl) throw new Error("Missing file and url");
+
+  // ✅✅ 핵심 FIX:
+  // blob: 는 브라우저 objectURL (대부분 크롭 전 "원본"이다)
+  // 우리는 Save Crop 이후의 dataURL(크롭 결과) 또는 http(s)만 업로드하도록 강제
+  if (fallbackUrl.startsWith("blob:")) {
+    const err: any = new Error(
+      "Refusing to upload blob: objectURL (likely original). Expected cropped dataURL or http(s) URL."
     );
+    err.code = "memotiles/original_upload_blocked";
+    throw err;
   }
 
-  const blob = await urlToBlob(url);
+  const blob = await urlToBlob(fallbackUrl);
+  const contentType =
+    blob.type ||
+    (chosenExt === "png" ? "image/png" : chosenExt === "webp" ? "image/webp" : "image/jpeg");
 
-  // ✅ contentType이 비정상인 경우 대비 (Rules: image/* 요구)
-  let ct = (blob.type || "").toLowerCase();
-  if (!ct || !ct.startsWith("image/")) {
-    ct = "image/jpeg";
-  }
+  await uploadBytes(storageRef, blob, {
+    contentType,
+    cacheControl: "public,max-age=31536000,immutable",
+  });
 
-  const ext =
-    ct.includes("png") ? "png" :
-    ct.includes("webp") ? "webp" :
-    ct.includes("heic") ? "heic" :
-    "jpg";
-
-  // ✅ Rules 경로와 일치
-  const path = `orders/${uid}/${orderId}/photo_${String(index).padStart(2, "0")}.${ext}`;
-  const fileRef = ref(storage, path);
-
-  await uploadBytes(fileRef, blob, { contentType: ct });
-  return await getDownloadURL(fileRef);
+  return await getDownloadURL(storageRef);
 }

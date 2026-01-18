@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import AppLayout from "@/components/AppLayout";
 import { useApp } from "@/context/AppContext";
@@ -14,9 +14,10 @@ import {
   CheckCircle2,
   AlertCircle,
   MapPin,
-  Clock,
-  ShieldCheck,
   MessageCircle,
+  X,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 
 type OrderStatus =
@@ -48,7 +49,10 @@ type ShippingAddress = {
 };
 
 type Order = {
-  id: string;
+  // 로컬/서버 혼재 가능
+  id: string;                 // localId or firestoreId
+  firestoreId?: string;       // 서버 docId
+  displayId?: string;         // ORD-xxxx
   createdAt?: string | number | Date;
   status?: string;
   currency?: string;
@@ -67,7 +71,6 @@ function normalizeStatus(raw?: string): OrderStatus {
   const v = (raw || "").toLowerCase().trim();
   if (v === "paid") return "paid";
   if (v === "processing") return "processing";
-  // 기존 UI에서 printing을 쓰던 흔적도 흡수
   if (v.includes("print") && v.includes("ing")) return "printing";
   if (v === "printed") return "printed";
   if (v.includes("ship")) return "shipping";
@@ -76,15 +79,13 @@ function normalizeStatus(raw?: string): OrderStatus {
   return "unknown";
 }
 
-function formatDate(d?: Order["createdAt"]) {
+/** ✅ locale 강제: EN -> en-US, TH -> th-TH */
+function formatDate(d?: Order["createdAt"], locale: "EN" | "TH" = "EN") {
   if (!d) return "";
   const date = d instanceof Date ? d : new Date(d);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
-  });
+  const loc = locale === "TH" ? "th-TH" : "en-US";
+  return date.toLocaleDateString(loc, { year: "numeric", month: "short", day: "2-digit" });
 }
 
 function formatMoney(total?: number, currency?: string) {
@@ -93,74 +94,30 @@ function formatMoney(total?: number, currency?: string) {
   if (c === "฿") return `฿${total.toFixed(0)}`;
   if (!c) return `${total.toFixed(2)}`;
   try {
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency: c,
-    }).format(total);
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: c }).format(total);
   } catch {
     return `${c}${total.toFixed(2)}`;
   }
 }
 
-function statusMeta(status: OrderStatus) {
+function statusMeta(status: OrderStatus, tt: (k: string, fb: string) => string) {
   switch (status) {
     case "paid":
-      return {
-        label: "Paid",
-        icon: CreditCard,
-        bg: "#EFF6FF",
-        border: "#BFDBFE",
-        color: "#1E40AF",
-      };
+      return { label: tt("statusPaid", "Paid"), icon: CreditCard, bg: "#EFF6FF", border: "#BFDBFE", color: "#1E40AF" };
     case "processing":
+      return { label: tt("statusProcessing", "Processing"), icon: Printer, bg: "#F5F3FF", border: "#DDD6FE", color: "#5B21B6" };
     case "printing":
-      return {
-        label: status === "processing" ? "Processing" : "Printing",
-        icon: Printer,
-        bg: "#F5F3FF",
-        border: "#DDD6FE",
-        color: "#5B21B6",
-      };
+      return { label: tt("statusPrinting", "Printing"), icon: Printer, bg: "#F5F3FF", border: "#DDD6FE", color: "#5B21B6" };
     case "printed":
-      return {
-        label: "Printed",
-        icon: Package,
-        bg: "#ECFDF5",
-        border: "#A7F3D0",
-        color: "#065F46",
-      };
+      return { label: tt("statusPrinted", "Printed"), icon: Package, bg: "#ECFDF5", border: "#A7F3D0", color: "#065F46" };
     case "shipping":
-      return {
-        label: "Shipping",
-        icon: Truck,
-        bg: "#FFFBEB",
-        border: "#FDE68A",
-        color: "#92400E",
-      };
+      return { label: tt("statusShipping", "Shipping"), icon: Truck, bg: "#FFFBEB", border: "#FDE68A", color: "#92400E" };
     case "delivered":
-      return {
-        label: "Delivered",
-        icon: CheckCircle2,
-        bg: "#ECFDF5",
-        border: "#A7F3D0",
-        color: "#065F46",
-      };
+      return { label: tt("statusDelivered", "Delivered"), icon: CheckCircle2, bg: "#ECFDF5", border: "#A7F3D0", color: "#065F46" };
     case "cancelled":
-      return {
-        label: "Cancelled",
-        icon: AlertCircle,
-        bg: "#FEF2F2",
-        border: "#FECACA",
-        color: "#991B1B",
-      };
+      return { label: tt("statusCancelled", "Cancelled"), icon: AlertCircle, bg: "#FEF2F2", border: "#FECACA", color: "#991B1B" };
     default:
-      return {
-        label: "Processing",
-        icon: Package,
-        bg: "#F3F4F6",
-        border: "#E5E7EB",
-        color: "#374151",
-      };
+      return { label: tt("statusProcessing", "Processing"), icon: Package, bg: "#F3F4F6", border: "#E5E7EB", color: "#374151" };
   }
 }
 
@@ -176,53 +133,40 @@ function getPreviewImages(order: Order) {
   return order.items
     .map((it) => it.previewUrl || it.src)
     .filter(Boolean)
-    .slice(0, 12) as string[];
-}
-
-function buildStatusSteps(current: OrderStatus) {
-  const base = [
-    { key: "paid", label: "Paid" },
-    { key: "printing", label: "Printing" },
-    { key: "shipping", label: "Shipping" },
-    { key: "delivered", label: "Delivered" },
-  ] as const;
-
-  if (current === "cancelled") {
-    return base.map((s) => ({ ...s, state: s.key === "paid" ? "done" : "todo" })) as any;
-  }
-
-  // processing도 printing 단계로 취급
-  const currentMapped: OrderStatus = current === "processing" ? "printing" : current;
-
-  const order = ["paid", "printing", "shipping", "delivered"] as OrderStatus[];
-  const idx = order.indexOf(currentMapped);
-  return base.map((s, i) => {
-    if (idx === -1) return { ...s, state: i === 0 ? "active" : "todo" };
-    if (i < idx) return { ...s, state: "done" };
-    if (i === idx) return { ...s, state: "active" };
-    return { ...s, state: "todo" };
-  });
+    .slice(0, 24) as string[];
 }
 
 /**
- * ✅ fallback: localStorage 전체를 훑어서 orderId를 찾는다.
- * - uid 키가 꼬였거나, 예전 키(guest/base)로 저장된 주문도 찾을 수 있음
+ * ✅ 주문 매칭(중요)
+ * - my-orders에서 넘어오는 id(= firestoreId || id) 를 기준으로,
+ *   상세에서 어떤 키로 저장되어 있든 찾아야 함.
  */
+function isOrderMatch(order: any, targetId: string) {
+  const t = String(targetId || "").trim();
+  if (!t) return false;
+
+  const a = String(order?.firestoreId || "").trim();
+  const b = String(order?.id || "").trim();
+  const c = String(order?.displayId || "").trim();
+
+  return a === t || b === t || c === t;
+}
+
+/** ✅ fallback: localStorage 전체를 훑어서 orderId를 찾는다. */
 function findOrderByScanningStorage(orderId: string): Order | null {
   if (typeof window === "undefined") return null;
 
   try {
     const keys = Object.keys(localStorage);
-    const targetKeys = keys.filter(
-      (k) => k === "memotiles_orders" || k.startsWith("memotiles_orders__")
-    );
+    const targetKeys = keys.filter((k) => k === "memotiles_orders" || k.startsWith("memotiles_orders__"));
 
     for (const k of targetKeys) {
       const raw = localStorage.getItem(k);
       if (!raw) continue;
       const list = JSON.parse(raw);
       if (!Array.isArray(list)) continue;
-      const found = list.find((o: any) => String(o?.id) === orderId);
+
+      const found = list.find((o: any) => isOrderMatch(o, orderId));
       if (found) return found as Order;
     }
   } catch {}
@@ -235,29 +179,61 @@ export default function MyOrderDetailPage() {
   const params = useParams<{ id: string }>();
   const app = useApp() as any;
 
+  // ✅ t가 함수든 객체든 안전하게 처리 (my-orders와 동일 스타일)
+  const tt = useCallback(
+    (key: string, fallback: string) => {
+      const maybeT = app?.t;
+      if (typeof maybeT === "function") {
+        const v = maybeT(key);
+        return typeof v === "string" && v.trim() && v !== key ? v : fallback;
+      }
+      if (maybeT && typeof maybeT === "object") {
+        const v = maybeT[key];
+        return typeof v === "string" && v.trim() && v !== key ? v : fallback;
+      }
+      return fallback;
+    },
+    [app?.t]
+  );
+
+  const locale = (app?.locale || "EN") as "EN" | "TH";
   const id = decodeURIComponent(params?.id || "");
 
   const [order, setOrder] = useState<Order | null>(null);
 
-  // ✅ my-orders와 같은 방식으로 auth 확정 후 로드
+  // ✅ Lightbox state
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+
+  // ✅ auth 확정 후 로드
   useEffect(() => {
     if (app?.authLoading !== false) return;
 
-    // 로그인 안됐으면 my-orders처럼 로그인으로
     if (!app?.user) {
-      router.replace(`/login?next=${encodeURIComponent(`/myorder/${encodeURIComponent(id)}`)}`);
+      const nextPath = `/myorder/${encodeURIComponent(id)}`;
+      router.replace(`/login?next=${encodeURIComponent(nextPath)}`);
       return;
+    }
+
+    // 0) context orders 먼저 (my-orders에서 이미 가지고 있을 수 있음)
+    const contextOrders: Order[] = (app?.orders || app?.myOrders || []) as Order[];
+    if (Array.isArray(contextOrders) && contextOrders.length) {
+      const found = contextOrders.find((o: any) => isOrderMatch(o, id));
+      if (found) {
+        setOrder(found);
+        return;
+      }
     }
 
     const uid = String(app.user.uid || "").trim();
     if (!uid) return;
 
-    // 1) 정상 경로: uid scoped
+    // 1) 정상 경로: uid scoped localStorage (getOrders)
     try {
       const all = getOrders(uid) as Order[];
-      const found = Array.isArray(all) ? all.find((o) => o.id === id) : null;
+      const found = Array.isArray(all) ? all.find((o: any) => isOrderMatch(o, id)) : null;
       if (found) {
-        setOrder(found || null);
+        setOrder(found);
         return;
       }
     } catch {}
@@ -265,37 +241,70 @@ export default function MyOrderDetailPage() {
     // 2) fallback: storage scan
     const scanned = findOrderByScanningStorage(id);
     setOrder(scanned || null);
-  }, [app?.authLoading, app?.user, id, router]);
+  }, [app?.authLoading, app?.user, id, router, app?.orders, app?.myOrders]);
 
   const status = useMemo(() => normalizeStatus(order?.status), [order?.status]);
-  const meta = useMemo(() => statusMeta(status), [status]);
+  const meta = useMemo(() => statusMeta(status, tt), [status, tt]);
   const Icon = meta.icon;
 
   const previews = useMemo(() => (order ? getPreviewImages(order) : []), [order]);
   const itemsCount = useMemo(() => (order ? getItemsCount(order) : 0), [order]);
-  const steps = useMemo(() => buildStatusSteps(status), [status]);
 
   const goBack = () => router.push("/my-orders");
 
-  // auth 확인 중이면 로딩
+  const openLightbox = useCallback(
+    (idx: number) => {
+      setActiveIdx(Math.max(0, Math.min(idx, previews.length - 1)));
+      setLightboxOpen(true);
+    },
+    [previews.length]
+  );
+
+  const closeLightbox = useCallback(() => setLightboxOpen(false), []);
+  const goPrev = useCallback(() => {
+    setActiveIdx((v) => {
+      const n = previews.length;
+      if (n <= 1) return v;
+      return (v - 1 + n) % n;
+    });
+  }, [previews.length]);
+
+  const goNext = useCallback(() => {
+    setActiveIdx((v) => {
+      const n = previews.length;
+      if (n <= 1) return v;
+      return (v + 1) % n;
+    });
+  }, [previews.length]);
+
+  // ✅ Keyboard support (esc / arrows)
+  useEffect(() => {
+    if (!lightboxOpen) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeLightbox();
+      if (e.key === "ArrowLeft") goPrev();
+      if (e.key === "ArrowRight") goNext();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [lightboxOpen, closeLightbox, goPrev, goNext]);
+
+  // ✅ auth 확인 중이면 로딩
   if (app?.authLoading !== false) {
     return (
       <AppLayout>
-        <div
-          style={{
-            minHeight: "calc(100vh - 64px)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            backgroundColor: "#F9FAFB",
-          }}
-        >
-          <span style={{ color: "var(--text-tertiary)", fontWeight: 700 }}>Loading...</span>
+        <div style={{ minHeight: "calc(100vh - 64px)", display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "#F9FAFB" }}>
+          <span style={{ color: "var(--text-tertiary)", fontWeight: 700 }}>
+            {tt("loading", "Loading...")}
+          </span>
         </div>
       </AppLayout>
     );
   }
 
+  // ✅ 주문 못 찾음
   if (!order) {
     return (
       <AppLayout>
@@ -305,10 +314,10 @@ export default function MyOrderDetailPage() {
               <button
                 onClick={goBack}
                 className="btn btn-text"
-                style={{ display: "flex", gap: 8, alignItems: "center" }}
+                style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 950 }}
               >
                 <ArrowLeft size={18} />
-                Back to My Orders
+                {tt("backToMyOrders", "Back to My Orders")}
               </button>
 
               <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center" }}>
@@ -323,25 +332,30 @@ export default function MyOrderDetailPage() {
                     alignItems: "center",
                     justifyContent: "center",
                     color: "#991B1B",
+                    flex: "0 0 auto",
                   }}
                 >
                   <AlertCircle size={20} />
                 </div>
-                <div>
-                  <div style={{ fontSize: 18, fontWeight: 950 }}>Order not found</div>
-                  <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontWeight: 600, marginTop: 4 }}>
-                    This order may have been stored under a different browser key.
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 18, fontWeight: 950 }}>
+                    {tt("orderNotFound", "Order not found")}
+                  </div>
+                  <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontWeight: 600, marginTop: 4, lineHeight: 1.5 }}>
+                    {tt("orderNotFoundDesc", "This order may have been stored under a different browser key.")}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-tertiary)", fontWeight: 700, marginTop: 8 }}>
+                    {tt("order", "Order")}: <span style={{ fontWeight: 900 }}>{id}</span>
                   </div>
                 </div>
               </div>
 
-              <div style={{ marginTop: 16, fontSize: 12, color: "var(--text-tertiary)", fontWeight: 650 }}>
-                Debug tip: check localStorage keys starting with <b>memotiles_orders</b>.
-              </div>
-
-              <div style={{ marginTop: 20 }}>
+              <div style={{ marginTop: 20, display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <button className="btn btn-primary" onClick={() => router.push("/editor")}>
-                  Start a new order
+                  {tt("startNewOrderCta", tt("startNewOrder", "Start a new order"))}
+                </button>
+                <button className="btn btn-text" onClick={goBack} style={{ fontWeight: 950 }}>
+                  {tt("myOrders", "My Orders")}
                 </button>
               </div>
             </div>
@@ -351,11 +365,14 @@ export default function MyOrderDetailPage() {
     );
   }
 
+  const activeSrc = previews[activeIdx] || "";
+  const displayOrderId = order.displayId || order.firestoreId || order.id;
+
   return (
     <AppLayout>
       <div style={{ backgroundColor: "#F9FAFB", minHeight: "calc(100vh - 64px)", padding: "2rem 0" }}>
         <div className="container" style={{ maxWidth: 980 }}>
-          {/* Top header */}
+          {/* ✅ Top header (뒤로가기 + 주문번호 + 상태 + 도움) */}
           <div
             className="card"
             style={{
@@ -364,27 +381,32 @@ export default function MyOrderDetailPage() {
               alignItems: "center",
               justifyContent: "space-between",
               gap: "1rem",
+              flexWrap: "wrap",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", minWidth: 0 }}>
               <button
                 onClick={goBack}
                 className="btn btn-text"
-                style={{ display: "flex", gap: 8, alignItems: "center" }}
+                style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 950 }}
               >
                 <ArrowLeft size={18} />
-                My Orders
+                {tt("myOrders", "My Orders")}
               </button>
 
               <div style={{ width: 1, height: 28, background: "var(--border)" }} />
 
-              <div>
-                <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontWeight: 800 }}>Order</div>
-                <div style={{ fontSize: 18, fontWeight: 950 }}>{order.id}</div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12, color: "var(--text-tertiary)", fontWeight: 800 }}>
+                  {tt("order", "Order")}
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 950, wordBreak: "break-all" }}>
+                  {displayOrderId}
+                </div>
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <span
                 style={{
                   fontSize: 12,
@@ -403,145 +425,54 @@ export default function MyOrderDetailPage() {
                 {meta.label}
               </span>
 
-              <button className="btn btn-text" onClick={() => router.push("/support")} style={{ fontWeight: 950 }}>
-                Support
+              <button
+                className="btn btn-text"
+                onClick={() => router.push("/support")}
+                style={{ fontWeight: 950, display: "inline-flex", alignItems: "center", gap: 8 }}
+              >
+                <MessageCircle size={16} />
+                {tt("needHelp", "Need help?")}
               </button>
             </div>
           </div>
 
-          {/* Main grid */}
-          <div
-            style={{
-              marginTop: "0.75rem",
-              display: "grid",
-              gridTemplateColumns: "1.4fr 0.9fr",
-              gap: "0.75rem",
-            }}
-          >
-            {/* Left: status + photos */}
+          {/* ✅ Main: 반응형(모바일 1컬럼 / 데스크탑 2컬럼) */}
+          <div className="myorder-grid" style={{ marginTop: "0.75rem" }}>
+            {/* Left: Photos (상단) */}
             <div style={{ display: "grid", gap: "0.75rem" }}>
-              {/* Status timeline */}
               <div className="card" style={{ padding: "1.25rem" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
                   <div>
-                    <div style={{ fontSize: 16, fontWeight: 950 }}>Delivery status</div>
+                    <div style={{ fontSize: 16, fontWeight: 950 }}>{tt("yourTiles", "Your tiles")}</div>
                     <div style={{ marginTop: 6, fontSize: 13, color: "var(--text-tertiary)", fontWeight: 650 }}>
-                      Updated from your latest order state.
+                      {itemsCount ? `${itemsCount} ${tt("tilesUnit", "tiles")}` : tt("tilePreviews", "Tile previews")}
+                      {order.createdAt ? (
+                        <span style={{ marginLeft: 10, fontWeight: 800 }}>
+                          · {formatDate(order.createdAt, locale)}
+                        </span>
+                      ) : null}
                     </div>
                   </div>
 
-                  <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontWeight: 800 }}>
-                    {formatDate(order.createdAt)}
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    marginTop: 16,
-                    display: "grid",
-                    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-                    gap: 10,
-                  }}
-                >
-                  {steps.map((s: any) => {
-                    const state = s.state as "done" | "active" | "todo";
-                    const bg = state === "done" ? "#ECFDF5" : state === "active" ? "#EFF6FF" : "#F3F4F6";
-                    const bd = state === "done" ? "#A7F3D0" : state === "active" ? "#BFDBFE" : "#E5E7EB";
-                    const color = state === "done" ? "#065F46" : state === "active" ? "#1E40AF" : "#374151";
-                    return (
-                      <div
-                        key={s.key}
-                        style={{
-                          padding: "0.9rem",
-                          borderRadius: 16,
-                          border: `1px solid ${bd}`,
-                          background: bg,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          gap: 10,
-                        }}
-                      >
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 12, fontWeight: 950, color }}>{s.label}</div>
-                          <div
-                            style={{
-                              fontSize: 12,
-                              marginTop: 4,
-                              color: "rgba(0,0,0,0.45)",
-                              fontWeight: 700,
-                            }}
-                          >
-                            {state === "done" ? "Done" : state === "active" ? "In progress" : "Next"}
-                          </div>
-                        </div>
-                        <div
-                          style={{
-                            width: 28,
-                            height: 28,
-                            borderRadius: 10,
-                            border: `1px solid ${bd}`,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            color,
-                            background: "rgba(255,255,255,0.7)",
-                            flex: "0 0 auto",
-                          }}
-                        >
-                          {state === "done" ? <CheckCircle2 size={16} /> : <Package size={16} />}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <InfoPill icon={Clock} text="Typical delivery: within ~5 days" />
-                  <InfoPill icon={ShieldCheck} text="Re-stickable tiles · wall-safe adhesive" />
-                </div>
-              </div>
-
-              {/* Photos */}
-              <div className="card" style={{ padding: "1.25rem" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                  <div>
-                    <div style={{ fontSize: 16, fontWeight: 950 }}>Your tiles</div>
-                    <div style={{ marginTop: 6, fontSize: 13, color: "var(--text-tertiary)", fontWeight: 650 }}>
-                      {itemsCount ? `${itemsCount} tiles` : "Tile previews"}
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 14, fontWeight: 950 }}>
+                  <div style={{ fontSize: 14, fontWeight: 950, whiteSpace: "nowrap" }}>
                     {order.total != null ? formatMoney(order.total, order.currency) : ""}
                   </div>
                 </div>
 
                 {previews.length === 0 ? (
-                  <div
-                    style={{
-                      marginTop: 16,
-                      padding: "1.25rem",
-                      border: "1px solid var(--border)",
-                      borderRadius: 16,
-                      background: "white",
-                    }}
-                  >
+                  <div style={{ marginTop: 16, padding: "1.25rem", border: "1px solid var(--border)", borderRadius: 16, background: "white" }}>
                     <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontWeight: 650 }}>
-                      No preview images found.
+                      {tt("noPreviewImages", "No preview images found.")}
                     </div>
                   </div>
                 ) : (
-                  <div
-                    style={{
-                      marginTop: 16,
-                      display: "grid",
-                      gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-                      gap: 10,
-                    }}
-                  >
+                  <div className="myorder-thumbgrid" style={{ marginTop: 16 }}>
                     {previews.map((src, idx) => (
-                      <div
+                      <button
                         key={`${order.id}-img-${idx}`}
+                        type="button"
+                        onClick={() => openLightbox(idx)}
+                        aria-label={`Open preview ${idx + 1}`}
                         style={{
                           width: "100%",
                           aspectRatio: "1 / 1",
@@ -549,18 +480,24 @@ export default function MyOrderDetailPage() {
                           overflow: "hidden",
                           border: "1px solid var(--border)",
                           background: "#F3F4F6",
+                          padding: 0,
+                          cursor: "pointer",
                         }}
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={src} alt="tile preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                      </div>
+                        <img
+                          src={src}
+                          alt="tile preview"
+                          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                        />
+                      </button>
                     ))}
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Right: address + summary + help */}
+            {/* Right: Shipping + Summary + Help */}
             <div style={{ display: "grid", gap: "0.75rem" }}>
               {/* Shipping */}
               <div className="card" style={{ padding: "1.25rem" }}>
@@ -581,9 +518,9 @@ export default function MyOrderDetailPage() {
                     <MapPin size={18} />
                   </div>
                   <div>
-                    <div style={{ fontSize: 16, fontWeight: 950 }}>Shipping</div>
+                    <div style={{ fontSize: 16, fontWeight: 950 }}>{tt("shippingTitle", "Shipping")}</div>
                     <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-tertiary)", fontWeight: 650 }}>
-                      Where your tiles will be delivered
+                      {tt("shippingSubtitle", "Where your tiles will be delivered")}
                     </div>
                   </div>
                 </div>
@@ -594,7 +531,9 @@ export default function MyOrderDetailPage() {
 
                 {(order.trackingNumber || order.shippingCarrier) && (
                   <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
-                    <div style={{ fontSize: 12, fontWeight: 900, color: "var(--text-tertiary)" }}>Tracking</div>
+                    <div style={{ fontSize: 12, fontWeight: 900, color: "var(--text-tertiary)" }}>
+                      {tt("tracking", "Tracking")}
+                    </div>
                     <div style={{ marginTop: 6, fontSize: 13, fontWeight: 800 }}>
                       {order.shippingCarrier ? `${order.shippingCarrier} · ` : ""}
                       {order.trackingNumber || "-"}
@@ -605,30 +544,23 @@ export default function MyOrderDetailPage() {
 
               {/* Order summary */}
               <div className="card" style={{ padding: "1.25rem" }}>
-                <div style={{ fontSize: 16, fontWeight: 950 }}>Order summary</div>
+                <div style={{ fontSize: 16, fontWeight: 950 }}>{tt("orderSummary", "Order summary")}</div>
 
                 <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-                  <KeyValue label="Order date" value={formatDate(order.createdAt) || "-"} />
-                  <KeyValue label="Items" value={itemsCount ? `${itemsCount} tiles` : "-"} />
-                  <KeyValue label="Status" value={meta.label} pill={{ bg: meta.bg, bd: meta.border, color: meta.color }} />
-                  <KeyValue label="Total" value={order.total != null ? formatMoney(order.total, order.currency) : "-"} />
-                </div>
-
-                <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
-                  <div style={{ fontSize: 12, fontWeight: 900, color: "var(--text-tertiary)" }}>Good to know</div>
-                  <ul
-                    style={{
-                      marginTop: 10,
-                      paddingLeft: 18,
-                      color: "var(--text-tertiary)",
-                      fontWeight: 650,
-                      lineHeight: 1.7,
-                    }}
-                  >
-                    <li>Once printing starts, changes may not be possible.</li>
-                    <li>If your tiles fall off, contact support — we’ll help.</li>
-                    <li>Keep your order ID for faster support.</li>
-                  </ul>
+                  <KeyValue label={tt("orderDate", "Order date")} value={formatDate(order.createdAt, locale) || "-"} />
+                  <KeyValue
+                    label={tt("items", "Items")}
+                    value={itemsCount ? `${itemsCount} ${tt("tilesUnit", "tiles")}` : "-"}
+                  />
+                  <KeyValue
+                    label={tt("orderStatus", "Status")}
+                    value={meta.label}
+                    pill={{ bg: meta.bg, bd: meta.border, color: meta.color }}
+                  />
+                  <KeyValue
+                    label={tt("total", "Total")}
+                    value={order.total != null ? formatMoney(order.total, order.currency) : "-"}
+                  />
                 </div>
               </div>
 
@@ -636,9 +568,9 @@ export default function MyOrderDetailPage() {
               <div className="card" style={{ padding: "1.25rem" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
                   <div>
-                    <div style={{ fontSize: 16, fontWeight: 950 }}>Need help?</div>
+                    <div style={{ fontSize: 16, fontWeight: 950 }}>{tt("needHelp", "Need help?")}</div>
                     <div style={{ marginTop: 6, fontSize: 12, color: "var(--text-tertiary)", fontWeight: 650 }}>
-                      Contact support with your order ID.
+                      {displayOrderId ? `Order ID: ${displayOrderId}` : ""}
                     </div>
                   </div>
 
@@ -647,48 +579,211 @@ export default function MyOrderDetailPage() {
 
                 <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
                   <button className="btn btn-primary" onClick={() => router.push("/contact")} style={{ width: "100%" }}>
-                    Contact us
+                    {tt("contactUs", "Contact us")}
                   </button>
                   <button className="btn btn-text" onClick={() => router.push("/support")} style={{ width: "100%", fontWeight: 950 }}>
-                    View FAQ
+                    {tt("viewFAQ", "View FAQ")}
                   </button>
                 </div>
               </div>
             </div>
           </div>
 
-          <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-tertiary)", fontWeight: 650 }}>
-            Tip: For true admin sync, connect orders to Firestore and fetch by order ID here.
-          </div>
+          {/* ✅ responsive style (파일 내 인라인) */}
+          <style jsx>{`
+            .myorder-grid {
+              display: grid;
+              grid-template-columns: 1.4fr 0.9fr;
+              gap: 0.75rem;
+            }
+            .myorder-thumbgrid {
+              display: grid;
+              grid-template-columns: repeat(4, minmax(0, 1fr));
+              gap: 10px;
+            }
+            @media (max-width: 920px) {
+              .myorder-grid {
+                grid-template-columns: 1fr;
+              }
+              .myorder-thumbgrid {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+              }
+            }
+            @media (max-width: 520px) {
+              .myorder-thumbgrid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+              }
+            }
+          `}</style>
         </div>
+
+        {/* ✅ Lightbox overlay */}
+        {lightboxOpen && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            onClick={closeLightbox}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.72)",
+              zIndex: 9999,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 16,
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: "min(980px, 96vw)",
+                height: "min(720px, 88vh)",
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.15)",
+                borderRadius: 18,
+                overflow: "hidden",
+                position: "relative",
+                backdropFilter: "blur(6px)",
+              }}
+            >
+              {/* Top bar */}
+              <div
+                style={{
+                  position: "absolute",
+                  top: 10,
+                  left: 10,
+                  right: 10,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  zIndex: 2,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 900,
+                    color: "rgba(255,255,255,0.85)",
+                    background: "rgba(0,0,0,0.35)",
+                    border: "1px solid rgba(255,255,255,0.18)",
+                    padding: "6px 10px",
+                    borderRadius: 999,
+                  }}
+                >
+                  {previews.length ? `${activeIdx + 1} / ${previews.length}` : ""}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={closeLightbox}
+                  aria-label="Close"
+                  style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: 12,
+                    border: "1px solid rgba(255,255,255,0.18)",
+                    background: "rgba(0,0,0,0.35)",
+                    color: "rgba(255,255,255,0.9)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    cursor: "pointer",
+                  }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Image */}
+              <div
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: 18,
+                }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={activeSrc}
+                  alt="tile preview large"
+                  style={{
+                    maxWidth: "100%",
+                    maxHeight: "100%",
+                    objectFit: "contain",
+                    borderRadius: 14,
+                    background: "rgba(255,255,255,0.06)",
+                  }}
+                />
+              </div>
+
+              {/* Arrows */}
+              {previews.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={goPrev}
+                    aria-label="Previous"
+                    style={{
+                      position: "absolute",
+                      left: 10,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      width: 44,
+                      height: 44,
+                      borderRadius: 14,
+                      border: "1px solid rgba(255,255,255,0.18)",
+                      background: "rgba(0,0,0,0.35)",
+                      color: "rgba(255,255,255,0.92)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      zIndex: 2,
+                    }}
+                  >
+                    <ChevronLeft size={20} />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={goNext}
+                    aria-label="Next"
+                    style={{
+                      position: "absolute",
+                      right: 10,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      width: 44,
+                      height: 44,
+                      borderRadius: 14,
+                      border: "1px solid rgba(255,255,255,0.18)",
+                      background: "rgba(0,0,0,0.35)",
+                      color: "rgba(255,255,255,0.92)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      zIndex: 2,
+                    }}
+                  >
+                    <ChevronRight size={20} />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </AppLayout>
   );
 }
 
 /* --------- small UI helpers --------- */
-
-function InfoPill({ icon: Icon, text }: { icon: any; text: string }) {
-  return (
-    <div
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "8px 12px",
-        borderRadius: 999,
-        border: "1px solid var(--border)",
-        background: "white",
-        fontSize: 12,
-        fontWeight: 800,
-        color: "var(--text-tertiary)",
-      }}
-    >
-      <Icon size={14} />
-      {text}
-    </div>
-  );
-}
 
 function KeyValue({
   label,
@@ -738,9 +833,7 @@ function AddressBlock({ addr }: { addr?: ShippingAddress }) {
           fontSize: 13,
         }}
       >
-        Shipping address is not available yet.
-        <br />
-        (Add it during checkout and save into the order object.)
+        -
       </div>
     );
   }
@@ -766,9 +859,7 @@ function AddressBlock({ addr }: { addr?: ShippingAddress }) {
         fontSize: 13,
       }}
     >
-      {lines.map((l, i) => (
-        <div key={i}>{l}</div>
-      ))}
+      {lines.length ? lines.map((l, i) => <div key={i}>{l}</div>) : <div>-</div>}
     </div>
   );
 }

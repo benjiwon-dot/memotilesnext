@@ -1,10 +1,24 @@
+// utils/translations.ts
+
 export type Locale = "EN" | "TH";
 
 export type TranslationKey =
+
   // Navbar
   | "login"
   | "myOrders"
   | "signOut"
+
+  // ✅ Header / Footer links (추가)
+  | "aboutUs"
+  | "support"
+  | "terms"
+  | "privacy"
+  | "footerAboutUs"
+  | "footerSupport"
+  | "footerTerms"
+  | "footerPrivacy"
+
   // Landing
   | "heroTitle"
   | "heroSubtitle"
@@ -44,6 +58,7 @@ export type TranslationKey =
   | "aboutSection5Title"
   | "aboutSection5Body"
   | "aboutCta"
+
   // Login
   | "welcomeBack"
   | "createAccount"
@@ -67,6 +82,7 @@ export type TranslationKey =
   | "loginWrongPassword"
   | "loginNoUser"
   | "loginFailed"
+
   // Recovery
   | "recoveryLink"
   | "recoveryTitle"
@@ -77,6 +93,7 @@ export type TranslationKey =
   | "recoverySent"
   | "recoverySendFailed"
   | "sending"
+
   // Dashboard
   | "uploadStep"
   | "cropStep"
@@ -100,6 +117,7 @@ export type TranslationKey =
   | "tilesCount"
   | "estTotal"
   | "proceedCheckout"
+
   // Checkout
   | "checkoutTitle"
   | "shippingAddress"
@@ -119,6 +137,7 @@ export type TranslationKey =
   | "payNow"
   | "cartEmpty"
   | "goToDashboard"
+
   // Orders legacy/other
   | "ordersTitle"
   | "active"
@@ -140,6 +159,7 @@ export type TranslationKey =
   | "orderLocked"
   | "orderLockedDesc"
   | "reorder"
+
   // My-orders page keys
   | "home"
   | "myOrdersTitle"
@@ -163,7 +183,53 @@ export type TranslationKey =
   | "statusCancelled"
   | "statusProcessing"
   | "tilesUnit"
-  | "view";
+  | "view"
+
+  // ✅ My-order detail page keys
+  | "backToMyOrders"
+  | "order"
+  | "yourTiles"
+  | "tilePreviews"
+  | "noPreviewImages"
+  | "shippingTitle"
+  | "shippingSubtitle"
+  | "tracking"
+  | "needHelp"
+  | "contactUs"
+  | "viewFAQ"
+  | "orderNotFound"
+  | "orderNotFoundDesc"
+  | "startNewOrderCta"
+  | "orderDate"
+
+  // ✅ Toss Success Page
+  | "paymentSuccessTitle"
+  | "paymentConfirmed"
+  | "paymentPreparing"
+  | "goToMyOrders"
+
+  // ✅ Verify Email (추가)
+  | "verifyTitle"
+  | "verifySubtitle"        // ✅ 추가됨
+  | "verifySentToEmail"
+  | "verifyPleaseClick"
+  | "verifyGenericDesc"
+  | "verifyTip"
+  | "verifyResend"
+  | "verifyResentOk"
+  | "verifyResentFail"
+  | "verifyAlreadyVerified"
+  | "verifyChecking"
+  | "verifyNotYet"
+  | "verifyCheckFail"
+  | "verifySending"
+  | "verifyBackToLogin"     // ✅ 추가됨
+  | "verifyHintBox"
+  | "verifyPreparing"
+  | "verifyVerifiedRedirecting"
+  | "verifyConfirmBtn"
+  | "verifyResendBtn"
+
 
 export type TranslationDict = Record<TranslationKey, string>;
 
@@ -173,6 +239,16 @@ export const translations: Record<Locale, TranslationDict> = {
     login: "Log in",
     myOrders: "My Orders",
     signOut: "Sign out",
+
+    // ✅ Header / Footer links
+    aboutUs: "About us",
+    support: "Support",
+    terms: "Terms",
+    privacy: "Privacy",
+    footerAboutUs: "About us",
+    footerSupport: "Support",
+    footerTerms: "Terms",
+    footerPrivacy: "Privacy",
 
     // Landing
     heroTitle: "Get your tiles.",
@@ -347,6 +423,52 @@ export const translations: Record<Locale, TranslationDict> = {
 
     tilesUnit: "tiles",
     view: "View",
+
+    // ✅ My-order detail page keys
+    backToMyOrders: "Back to My Orders",
+    order: "Order",
+    yourTiles: "Your tiles",
+    tilePreviews: "Tile previews",
+    noPreviewImages: "No preview images found.",
+    shippingTitle: "Shipping",
+    shippingSubtitle: "Where your tiles will be delivered",
+    tracking: "Tracking",
+    needHelp: "Need help?",
+    contactUs: "Contact us",
+    viewFAQ: "View FAQ",
+    orderNotFound: "Order not found",
+    orderNotFoundDesc: "This order may have been stored under a different browser key.",
+    startNewOrderCta: "Start a new order",
+    orderDate: "Order date",
+
+    // ✅ Toss Success Page
+    paymentSuccessTitle: "Thank you!",
+    paymentConfirmed: "Your order has been confirmed.",
+    paymentPreparing: "We’ll start preparing your tiles right away.",
+    goToMyOrders: "Go to My Orders",
+
+    // ✅ Verify Email (추가)
+    verifyTitle: "Verify your email",
+    verifySubtitle: "One quick step to secure your account",
+    verifySentToEmail: "Verification email sent to {email}",
+    verifyPleaseClick: "Please check your inbox and click the verification link.",
+    verifyGenericDesc: "Please check your email and click the verification link.",
+    verifyTip: "Check spam/junk if you can’t find the email.",
+    verifyResend: "Resend email",
+    verifyResentOk: "Verification email sent again. Please check your inbox.",
+    verifyResentFail: "Failed to resend verification email.",
+    verifyAlreadyVerified: "Confirm",
+    verifyChecking: "Checking…",
+    verifyNotYet: "Not verified yet. Please click the link in your email and try again.",
+    verifyCheckFail: "Failed to check verification status.",
+    verifySending: "Sending…",
+    verifyHintBox: "Please verify your email to continue.",
+    verifyBackToLogin: "Back to login",
+    verifyPreparing: "Preparing verification…",
+    verifyVerifiedRedirecting: "Verified! Redirecting…",
+    verifyConfirmBtn: "Confirm",
+    verifyResendBtn: "Resend email",
+
   },
 
   TH: {
@@ -354,6 +476,16 @@ export const translations: Record<Locale, TranslationDict> = {
     login: "เข้าสู่ระบบ",
     myOrders: "คำสั่งซื้อของฉัน",
     signOut: "ออกจากระบบ",
+
+    // ✅ Header / Footer links
+    aboutUs: "เกี่ยวกับเรา",
+    support: "ฝ่ายช่วยเหลือ",
+    terms: "ข้อกำหนด",
+    privacy: "ความเป็นส่วนตัว",
+    footerAboutUs: "เกี่ยวกับเรา",
+    footerSupport: "ฝ่ายช่วยเหลือ",
+    footerTerms: "ข้อกำหนด",
+    footerPrivacy: "ความเป็นส่วนตัว",
 
     // Landing
     heroTitle: "สั่งทำรูปติดผนัง",
@@ -434,7 +566,6 @@ export const translations: Record<Locale, TranslationDict> = {
     recoverySendFailed: "ส่งอีเมลรีเซ็ตไม่สำเร็จ",
     sending: "กำลังส่ง…",
 
-    
     // Dashboard
     uploadStep: "อัปโหลด",
     cropStep: "ปรับแต่ง",
@@ -479,7 +610,7 @@ export const translations: Record<Locale, TranslationDict> = {
     cartEmpty: "ตะกร้าของคุณว่างเปล่า",
     goToDashboard: "ไปที่แดชบอร์ด",
 
-    // Orders (legacy / other pages)
+    // Orders
     ordersTitle: "คำสั่งซื้อของฉัน",
     active: "ที่ต้องได้รับ",
     past: "ประวัติ",
@@ -521,7 +652,7 @@ export const translations: Record<Locale, TranslationDict> = {
 
     statusPaid: "ชำระเงินแล้ว",
     statusPrinting: "กำลังพิมพ์",
-    statusPrinted: "พิมพ์เสร็จ",
+    statusPrinted: "พิมพ์เสรจ",
     statusShipping: "กำลังจัดส่ง",
     statusDelivered: "จัดส่งสำเร็จ",
     statusCancelled: "ยกเลิกแล้ว",
@@ -529,5 +660,51 @@ export const translations: Record<Locale, TranslationDict> = {
 
     tilesUnit: "แผ่น",
     view: "ดู",
+
+    // ✅ My-order detail page keys
+    backToMyOrders: "กลับไปที่คำสั่งซื้อของฉัน",
+    order: "คำสั่งซื้อ",
+    yourTiles: "รูปของคุณ",
+    tilePreviews: "ตัวอย่างรูป",
+    noPreviewImages: "ไม่พบรูปตัวอย่าง",
+    shippingTitle: "การจัดส่ง",
+    shippingSubtitle: "ที่อยู่สำหรับจัดส่งสินค้า",
+    tracking: "ติดตามพัสดุ",
+    needHelp: "ต้องการความช่วยเหลือ?",
+    contactUs: "ติดต่อเรา",
+    viewFAQ: "ดูคำถามที่พบบ่อย",
+    orderNotFound: "ไม่พบคำสั่งซื้อ",
+    orderNotFoundDesc: "คำสั่งซื้อนี้อาจถูกบันทึกไว้ในเบราว์เซอร์คีย์อื่น",
+    startNewOrderCta: "เริ่มสั่งซื้อใหม่",
+    orderDate: "วันที่สั่งซื้อ",
+
+    // ✅ Toss Success Page
+    paymentSuccessTitle: "ขอบคุณ!",
+    paymentConfirmed: "คำสั่งซื้อของคุณได้รับการยืนยันแล้ว",
+    paymentPreparing: "เราจะเริ่มเตรียมไทล์ของคุณทันที",
+    goToMyOrders: "ไปที่คำสั่งซื้อของฉัน",
+
+    // ✅ Verify Email (추가)
+    verifyTitle: "ยืนยันอีเมลของคุณ",
+    verifySubtitle: "อีกหนึ่งขั้นตอนเพื่อความปลอดภัยของบัญชีคุณ",
+    verifySentToEmail: "ส่งอีเมลยืนยันไปที่ {email} แล้ว",
+    verifyPleaseClick: "กรุณาตรวจสอบอีเมลและกดลิงก์ยืนยัน",
+    verifyGenericDesc: "กรุณาตรวจสอบอีเมลและกดลิงก์ยืนยัน",
+    verifyTip: "หากไม่พบอีเมล กรุณาตรวจสอบโฟลเดอร์สแปมหรือจดหมายขยะ",
+    verifyResend: "ส่งอีเมลอีกครั้ง",
+    verifyResentOk: "ส่งอีเมลยืนยันอีกครั้งแล้ว กรุณาตรวจสอบกล่องจดหมาย",
+    verifyResentFail: "ไม่สามารถส่งอีเมลยืนยันอีกครั้งได้",
+    verifyAlreadyVerified: "ยืนยันแล้ว",
+    verifyChecking: "กำลังตรวจสอบ…",
+    verifyNotYet: "ยังไม่ยืนยัน กรุณากดลิงก์ในอีเมลแล้วลองใหม่",
+    verifyCheckFail: "ตรวจสอบสถานะการยืนยันไม่สำเร็จ",
+    verifySending: "กำลังส่ง…",
+    verifyHintBox: "กรุณายืนยันอีเมลเพื่อดำเนินการต่อ",
+    verifyBackToLogin: "กลับไปหน้าเข้าสู่ระบบ",
+    verifyPreparing: "กำลังเตรียมการยืนยัน…",
+    verifyVerifiedRedirecting: "ยืนยันแล้ว! กำลังไปต่อ…",
+    verifyConfirmBtn: "ยืนยันแล้ว",
+    verifyResendBtn: "ส่งอีเมลอีกครั้ง",
+
   },
 };

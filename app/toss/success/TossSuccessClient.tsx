@@ -1,110 +1,236 @@
-// app/toss/success/TossSuccessClient.tsx
+// app/toss/success/successClient.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import AppLayout from "@/components/AppLayout";
 import { useApp } from "@/context/AppContext";
-import { Loader2 } from "lucide-react";
+import { CheckCircle2, ArrowRight, AlertCircle, Loader2 } from "lucide-react";
 
-const SESSION_KEY = "MYTILE_ORDER_ITEMS";
+import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { getFirebaseClient } from "@/lib/firebase.client";
 
-export default function TossSuccessClient() {
+type ApproveState = "idle" | "approving" | "approved" | "failed";
+
+export default function SuccessClient() {
   const router = useRouter();
   const sp = useSearchParams();
   const app = useApp() as any;
 
-  const t = app?.t as ((k: string) => string) | undefined;
-  const tr = (k: string, fallback: string) => {
-    const v = t?.(k);
-    if (!v || v === k) return fallback;
-    return v;
-  };
+  const t = app?.t || {};
 
+  const [state, setState] = useState<ApproveState>("idle");
+  const [errorMsg, setErrorMsg] = useState<string>("");
+
+  // ✅ Toss redirect params
   const paymentKey = sp.get("paymentKey") || "";
   const orderId = sp.get("orderId") || "";
-  const amountStr = sp.get("amount") || "0";
-  const createdOrderDocId = sp.get("docId") || ""; // (사용 안해도 유지)
+  const amountStr = sp.get("amount") || "";
+  const amount = Number(amountStr || 0);
 
-  const amount = useMemo(() => Number(amountStr || 0), [amountStr]);
+  // ✅ 우리가 Checkout에서 successUrl에 넣어둔 docId
+  const docId = sp.get("docId") || "";
 
-  const [status, setStatus] = useState<"loading" | "ok" | "fail">("loading");
-  const [error, setError] = useState<string>("");
+  const canApprove = useMemo(() => {
+    return Boolean(paymentKey && orderId && Number.isFinite(amount) && amount > 0 && docId);
+  }, [paymentKey, orderId, amount, docId]);
 
   useEffect(() => {
-    const run = async () => {
-      try {
-        if (!paymentKey || !orderId || !Number.isFinite(amount) || amount <= 0) {
-          throw new Error("Missing payment params.");
-        }
+    let cancelled = false;
 
-        const res = await fetch("/api/toss/confirm", {
+    async function run() {
+      if (!canApprove) {
+        setState("failed");
+        setErrorMsg(
+          "Missing payment parameters. Please return to My Orders or try again.\n" +
+            `paymentKey:${!!paymentKey}, orderId:${!!orderId}, amount:${amount}, docId:${!!docId}`
+        );
+        return;
+      }
+
+      setState("approving");
+      setErrorMsg("");
+
+      try {
+        // 1) ✅ 서버에서 Toss 승인(검증)
+        const resp = await fetch("/api/toss/confirm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ paymentKey, orderId, amount }),
         });
 
-        const data = await res.json();
-        if (!res.ok || !data?.ok) {
-          throw new Error(JSON.stringify(data?.error || data));
+        const data = await resp.json().catch(() => ({}));
+
+        if (!resp.ok || !data?.ok) {
+          const msg =
+            data?.error?.message ||
+            data?.error ||
+            data?.message ||
+            "Payment approval failed. Please contact support.";
+          throw new Error(typeof msg === "string" ? msg : "Payment approval failed.");
         }
 
-        // ✅ 결제 승인 성공 시에만 cart/session 비우기
-        if (typeof app?.setCart === "function") app.setCart([]);
-        try {
-          sessionStorage.removeItem(SESSION_KEY);
-        } catch {}
+        const payment = data?.payment;
 
-        setStatus("ok");
+        // 2) ✅ Firestore 주문 업데이트 (paid 처리)
+        const { db } = getFirebaseClient();
+
+        const ref = doc(db, "orders", docId);
+
+        await updateDoc(ref, {
+          status: "paid",
+          paidAt: serverTimestamp(),
+          paymentProvider: "toss",
+          toss: {
+            paymentKey,
+            orderId,
+            amount,
+            // 필요한 값만 저장 (너무 큰 객체는 저장하지 말자)
+            method: payment?.method || null,
+            status: payment?.status || null,
+            currency: payment?.currency || null,
+            approvedAt: payment?.approvedAt || null,
+            receiptUrl: payment?.receipt?.url || null,
+          },
+          updatedAt: serverTimestamp(),
+        });
+
+        if (cancelled) return;
+        setState("approved");
       } catch (e: any) {
-        console.error("[TOSS SUCCESS] approve failed:", e);
-        setError(e?.message || "Payment approval failed.");
-        setStatus("fail");
+        if (cancelled) return;
+        setState("failed");
+        setErrorMsg(e?.message || "Payment approval failed.");
       }
-    };
+    }
 
     run();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [canApprove, paymentKey, orderId, amount, docId]);
+
+  const isBusy = state === "approving";
 
   return (
     <AppLayout>
-      <div className="container" style={{ marginTop: "2.5rem", marginBottom: "4rem", maxWidth: 720 }}>
-        {status === "loading" && (
-          <div className="card" style={{ padding: "1.25rem" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <Loader2 className="animate-spin" size={18} />
-              <div style={{ fontWeight: 800 }}>{tr("tossApproving", "Approving your payment…")}</div>
-            </div>
-            <div style={{ marginTop: 10, color: "var(--text-tertiary)", fontSize: 13 }}>
-              {tr("tossApprovingHint", "Please don’t close this page.")}
-            </div>
+      <div
+        style={{
+          backgroundColor: "#F9FAFB",
+          minHeight: "calc(100vh - 64px)",
+          padding: "2rem 0",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <div
+          className="card"
+          style={{
+            width: "min(720px, 92vw)",
+            padding: "1.75rem",
+            textAlign: "center",
+            transform: "translateY(-300px)",
+          }}
+        >
+          {/* 아이콘 */}
+          <div
+            style={{
+              width: 54,
+              height: 54,
+              borderRadius: 18,
+              margin: "0 auto",
+              background: state === "failed" ? "#FEF2F2" : "#ECFDF5",
+              border: state === "failed" ? "1px solid #FECACA" : "1px solid #A7F3D0",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: state === "failed" ? "#991B1B" : "#065F46",
+            }}
+          >
+            {isBusy ? <Loader2 className="animate-spin" size={22} /> : state === "failed" ? <AlertCircle size={26} /> : <CheckCircle2 size={26} />}
           </div>
-        )}
 
-        {status === "ok" && (
-          <div className="card" style={{ padding: "1.25rem" }}>
-            <div style={{ fontSize: 20, fontWeight: 950 }}>{tr("paymentSuccessTitle", "Payment complete")}</div>
-            <div style={{ marginTop: 10, color: "var(--text-tertiary)", fontSize: 13 }}>
-              {tr("paymentSuccessBody", "Thanks! Your order is now being processed.")}
-            </div>
+          {/* 타이틀 */}
+          <div style={{ marginTop: 14, fontSize: 22, fontWeight: 950 }}>
+            {isBusy
+              ? (t.paymentApprovingTitle || "Approving payment…")
+              : state === "failed"
+              ? (t.paymentFailedTitle || "Payment issue")
+              : (t.paymentSuccessTitle || "Thank you!")}
+          </div>
 
-            <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => router.replace("/my-orders")}>
-              {tr("goToOrders", "Go to My Orders")}
+          {/* 설명 */}
+          <div
+            style={{
+              marginTop: 12,
+              fontSize: 14,
+              color: "var(--text-tertiary)",
+              fontWeight: 650,
+              lineHeight: 1.7,
+              textAlign: "center",
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {isBusy ? (
+              <>
+                <div>{t.paymentApprovingDesc1 || "Please wait a moment."}</div>
+                <div>{t.paymentApprovingDesc2 || "We’re confirming your payment securely."}</div>
+              </>
+            ) : state === "failed" ? (
+              <div>{errorMsg || (t.paymentFailedDesc || "We couldn't confirm your payment. Please try again.")}</div>
+            ) : (
+              <>
+                <div>{t.paymentConfirmed || "Your order is confirmed."}</div>
+                <div>{t.paymentPreparing || "We’ll start preparing your tiles now."}</div>
+              </>
+            )}
+          </div>
+
+          {/* 버튼 */}
+          <div style={{ marginTop: 22, display: "grid", gap: 10, justifyItems: "center" }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => router.push("/my-orders")}
+              style={{
+                width: "min(320px, 100%)",
+                display: "inline-flex",
+                justifyContent: "center",
+                gap: 8,
+                opacity: isBusy ? 0.7 : 1,
+              }}
+              disabled={isBusy}
+            >
+              {t.goToMyOrders || "Go to My Orders"}
+              <ArrowRight size={18} />
             </button>
-          </div>
-        )}
 
-        {status === "fail" && (
-          <div className="card" style={{ padding: "1.25rem" }}>
-            <div style={{ fontSize: 20, fontWeight: 950 }}>{tr("paymentFailedTitle", "Payment approval failed")}</div>
-            <div style={{ marginTop: 10, color: "crimson", fontSize: 13, whiteSpace: "pre-wrap" }}>{error}</div>
-
-            <button className="btn" style={{ marginTop: 16 }} onClick={() => router.replace("/checkout")}>
-              {tr("backToCheckout", "Back to checkout")}
-            </button>
+            {state === "failed" ? (
+              <button
+                className="btn btn-text"
+                onClick={() => router.push("/checkout")}
+                style={{ width: "min(320px, 100%)", fontWeight: 950 }}
+                disabled={isBusy}
+              >
+                {t.tryAgain || "Try again"}
+              </button>
+            ) : (
+              <button
+                className="btn btn-text"
+                onClick={() => router.push("/editor")}
+                style={{ width: "min(320px, 100%)", fontWeight: 950 }}
+                disabled={isBusy}
+              >
+                {t.createTiles || "Create your tiles"}
+              </button>
+            )}
           </div>
-        )}
+
+          {/* 디버그(원하면 제거) */}
+          <div style={{ marginTop: 14, fontSize: 12, color: "var(--text-tertiary)" }}>
+            {orderId ? <>Order ID: {orderId}</> : null}
+          </div>
+        </div>
       </div>
     </AppLayout>
   );

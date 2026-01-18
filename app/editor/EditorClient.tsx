@@ -28,10 +28,20 @@ type UploadItem = {
   status?: string;
   isCropped?: boolean;
 
-  src?: string; // objectURL (편집화면용)
+  src?: string;
   fileName?: string;
 
-  previewUrl?: string; // dataURL (주문/리스트용 영구) - ✅ 크롭 결과
+  printBlob?: Blob;
+  printBytes?: number;
+
+  file?: File;
+  originalBytes?: number;
+  originalType?: string;
+
+  previewUrl?: string;
+
+  // ✅ ADD
+  frameSizeUsed?: number;
 };
 
 type CropState = {
@@ -50,6 +60,8 @@ const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15MB
 // ✅ ADD: AppContext cart persist key와 동일한 prefix를 사용 (guest 키 직접 저장해 안정성 강화)
 const CART_STORAGE_PREFIX = "MEMOTILES_CART_V1";
 const cartStorageKey = (uid?: string | null) => `${CART_STORAGE_PREFIX}:${uid || "guest"}`;
+
+type CropRect = { sx: number; sy: number; sw: number; sh: number };
 
 export default function EditorPage() {
   const app = useApp() as any;
@@ -110,6 +122,10 @@ export default function EditorPage() {
   const isFilePickerOpeningRef = useRef(false);
   const lastPickerOpenAtRef = useRef(0);
 
+  // ✅ ADD: picker cancel을 안정적으로 처리하기 위한 session
+  const pickerSessionRef = useRef(0);
+  const pendingPickerSessionRef = useRef<number | null>(null);
+
   const objectUrlMapRef = useRef<Record<string, string>>({});
 
   const [isDragging, setIsDragging] = useState(false);
@@ -133,6 +149,12 @@ export default function EditorPage() {
     saveStatusesRef.current = saveStatuses;
   }, [saveStatuses]);
 
+  // ✅ selectedUploadId 바뀌는 순간, 이전 pending을 끊어주면 “엉뚱한 slot 적용”이 크게 줄어듦
+  useEffect(() => {
+    pendingTargetIdRef.current = null;
+    pendingPickerSessionRef.current = null;
+  }, [selectedUploadId]);
+
   const timeoutsRef = useRef<number[]>([]);
   const setSafeTimeout = (fn: () => void, ms: number) => {
     const id = window.setTimeout(fn, ms);
@@ -154,11 +176,19 @@ export default function EditorPage() {
     };
   }, []);
 
+  // ✅ 파일 피커 취소(cancel) 시: focus 복귀 이벤트가 발생하는데, change 이벤트는 안 올 수 있음
+  // 그래서 pendingTargetIdRef를 강제로 null로 만들어 “다음 업로드가 이전 slot에 박히는 버그”를 차단
   useEffect(() => {
     const onFocus = () => {
       window.setTimeout(() => {
         isFilePickerOpeningRef.current = false;
-      }, 200);
+
+        // ✅ cancel 방지 핵심: change가 안 온 케이스
+        if (pendingPickerSessionRef.current != null) {
+          pendingTargetIdRef.current = null;
+          pendingPickerSessionRef.current = null;
+        }
+      }, 180);
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
@@ -205,7 +235,14 @@ export default function EditorPage() {
   // ---------------------------
   const persistEditorState = () => {
     try {
-      const payload = { uploads, crops, saveStatuses, selectedUploadId };
+      // ✅ File/Blob은 JSON 저장 불가 → 제외하고 저장
+      const safeUploads = uploads.map((u) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { file, printBlob, ...rest } = u;
+        return rest;
+      });
+
+      const payload = { uploads: safeUploads, crops, saveStatuses, selectedUploadId };
       sessionStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(payload));
     } catch {}
   };
@@ -242,6 +279,10 @@ export default function EditorPage() {
           status: "cropped",
           isCropped: true,
           previewUrl: item.previewUrl || item.src,
+          // edit에서는 file/printBlob 복구 불가
+          file: undefined,
+          printBlob: undefined,
+          printBytes: undefined,
         };
       });
 
@@ -309,13 +350,15 @@ export default function EditorPage() {
 
   const photos = useMemo(() => uploads.filter((u) => !!u.src), [uploads]);
   const savedCount = useMemo(() => photos.filter((u) => saveStatuses[u.id] === "saved").length, [photos, saveStatuses]);
-  const allPhotosSaved = useMemo(() => photos.length > 0 && photos.every((u) => saveStatuses[u.id] === "saved"), [photos, saveStatuses]);
+  const allPhotosSaved = useMemo(
+    () => photos.length > 0 && photos.every((u) => saveStatuses[u.id] === "saved"),
+    [photos, saveStatuses]
+  );
 
-  const checkoutDisabled =
-    !allPhotosSaved || isLoadingImage || labState.checkoutState === "disabled" || isNavigating;
+  const checkoutDisabled = !allPhotosSaved || isLoadingImage || labState.checkoutState === "disabled" || isNavigating;
 
   // ---------------------------
-  // ✅ cover 기반 실제 clamp
+  // ✅ cover 기반 clamp
   // ---------------------------
   const getCoverSizePx = (imgMeta?: ImgMeta) => {
     const size = frameSize || 480;
@@ -373,13 +416,20 @@ export default function EditorPage() {
 
     const newId = `u-${Date.now()}`;
     setUploads((prev) => [...prev, { id: newId, status: "needs-crop", isCropped: false }]);
-    setCrops((prev) => ({ ...prev, [newId]: { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" } }));
+    setCrops((prev) => ({
+      ...prev,
+      [newId]: { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" },
+    }));
     setSelectedUploadId(newId);
     return newId;
   };
 
   const openFilePickerFor = (targetId?: string) => {
     const now = Date.now();
+
+    // ✅ 기존 pending 제거 (이전 cancel 잔상 제거)
+    pendingTargetIdRef.current = null;
+    pendingPickerSessionRef.current = null;
 
     if (isFilePickerOpeningRef.current) return;
     if (now - lastPickerOpenAtRef.current < 700) return;
@@ -388,6 +438,12 @@ export default function EditorPage() {
     lastPickerOpenAtRef.current = now;
 
     const id = targetId || ensureSlot();
+
+    // ✅ picker session 시작
+    pickerSessionRef.current += 1;
+    const session = pickerSessionRef.current;
+    pendingPickerSessionRef.current = session;
+
     pendingTargetIdRef.current = id;
 
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -396,9 +452,16 @@ export default function EditorPage() {
       fileInputRef.current?.click();
     });
 
+    // ✅ change가 안 오는 cancel 케이스를 대비해 타임아웃으로도 정리
     setSafeTimeout(() => {
       isFilePickerOpeningRef.current = false;
-    }, 1500);
+
+      // 아직도 같은 세션이 pending이면 cancel로 보고 초기화
+      if (pendingPickerSessionRef.current === session) {
+        pendingTargetIdRef.current = null;
+        pendingPickerSessionRef.current = null;
+      }
+    }, 2200);
   };
 
   const applyFileToSlot = (slotId: string, file: File) => {
@@ -419,9 +482,21 @@ export default function EditorPage() {
               ...u,
               src: nextUrl,
               fileName: file.name,
+
+              file,
+              originalBytes: file.size,
+              originalType: file.type,
+
               status: "needs-crop",
               isCropped: false,
               previewUrl: undefined,
+
+              // 새 파일이면 인쇄/프리뷰 결과도 초기화
+              printBlob: undefined,
+              printBytes: undefined,
+
+              // ✅ 새 파일이면 frameSizeUsed도 초기화(다음 save 때 다시 기록)
+              frameSizeUsed: undefined,
             }
           : u
       )
@@ -455,12 +530,24 @@ export default function EditorPage() {
     const file = e.target.files?.[0];
     const slotId = pendingTargetIdRef.current || selectedUploadId;
 
+    // ✅ 어떤 경우든 input value는 비워줌 (같은 파일 재선택 가능)
     e.target.value = "";
 
-    if (!file || !slotId) {
+    // ✅ change가 오긴 했는데 file이 없으면 = cancel 케이스
+    if (!file) {
       pendingTargetIdRef.current = null;
+      pendingPickerSessionRef.current = null;
       return;
     }
+
+    if (!slotId) {
+      pendingTargetIdRef.current = null;
+      pendingPickerSessionRef.current = null;
+      return;
+    }
+
+    // ✅ file 선택이 된 순간, pending session 종료
+    pendingPickerSessionRef.current = null;
 
     if (isHeicLike(file)) {
       setValidationMessage(tr("heicNotSupported", "HEIC/HEIF is not supported yet. Please upload JPG, PNG, or WebP."));
@@ -496,7 +583,10 @@ export default function EditorPage() {
 
     const newId = `u-${Date.now()}`;
     setUploads((prev) => [...prev, { id: newId, status: "needs-crop", isCropped: false }]);
-    setCrops((prev) => ({ ...prev, [newId]: { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" } }));
+    setCrops((prev) => ({
+      ...prev,
+      [newId]: { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" },
+    }));
     setSelectedUploadId(newId);
 
     setSafeTimeout(() => openFilePickerFor(newId), 0);
@@ -513,7 +603,25 @@ export default function EditorPage() {
 
     setUploads((prev) =>
       prev.map((u) =>
-        u.id === id ? { ...u, src: undefined, fileName: undefined, isCropped: false, status: "needs-crop", previewUrl: undefined } : u
+        u.id === id
+          ? {
+              ...u,
+              src: undefined,
+              fileName: undefined,
+              isCropped: false,
+              status: "needs-crop",
+              previewUrl: undefined,
+
+              file: undefined,
+              originalBytes: undefined,
+              originalType: undefined,
+
+              printBlob: undefined,
+              printBytes: undefined,
+
+              frameSizeUsed: undefined,
+            }
+          : u
       )
     );
 
@@ -528,10 +636,47 @@ export default function EditorPage() {
   };
 
   // ---------------------------
-  // ✅ 캔버스 렌더링
+  // ✅ 좌표 역산 (에디터 표시값 → 원본 crop rect)
+  // ---------------------------
+  const computeSourceCropRectFromEditor = (imgW: number, imgH: number, frame: number, crop: CropState): CropRect => {
+    const zoom = crop.zoom || 1;
+    const dx = crop.dragPos?.x || 0;
+    const dy = crop.dragPos?.y || 0;
+
+    const baseScale = Math.max(frame / imgW, frame / imgH);
+    const dispW = imgW * baseScale * zoom;
+    const dispH = imgH * baseScale * zoom;
+
+    const imgLeft = frame / 2 - dispW / 2 + dx;
+    const imgTop = frame / 2 - dispH / 2 + dy;
+
+    let sx = (0 - imgLeft) / (baseScale * zoom);
+    let sy = (0 - imgTop) / (baseScale * zoom);
+    let sw = frame / (baseScale * zoom);
+    let sh = frame / (baseScale * zoom);
+
+    if (!Number.isFinite(sx)) sx = 0;
+    if (!Number.isFinite(sy)) sy = 0;
+    if (!Number.isFinite(sw)) sw = imgW;
+    if (!Number.isFinite(sh)) sh = imgH;
+
+    sx = Math.max(0, Math.min(imgW, sx));
+    sy = Math.max(0, Math.min(imgH, sy));
+
+    if (sx + sw > imgW) sw = imgW - sx;
+    if (sy + sh > imgH) sh = imgH - sy;
+
+    sw = Math.max(1, sw);
+    sh = Math.max(1, sh);
+
+    return { sx, sy, sw, sh };
+  };
+
+  // ---------------------------
+  // ✅ 프리뷰(640) 생성: 동일한 역산 좌표 사용
   // ---------------------------
   const createCroppedPreviewDataUrl = async (src: string, crop: CropState): Promise<string> => {
-    const SIZE = 640;
+    const SIZE = 900;
 
     const img = await new Promise<HTMLImageElement>((resolve, reject) => {
       const i = new Image();
@@ -540,42 +685,82 @@ export default function EditorPage() {
       i.src = src;
     });
 
-    const canvas = document.createElement("canvas");
-    canvas.width = SIZE;
-    canvas.height = SIZE;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas not supported");
-
-    const filterStyle = getFilterStyle(crop.filter);
-    ctx.filter = filterStyle === "none" ? "none" : filterStyle;
-
     const iw = img.naturalWidth || img.width;
     const ih = img.naturalHeight || img.height;
 
-    const baseScale = Math.max(SIZE / iw, SIZE / ih);
-    const scale = baseScale * (crop.zoom || 1);
+    const FRAME = frameSize || 480;
+    const { sx, sy, sw, sh } = computeSourceCropRectFromEditor(iw, ih, FRAME, crop);
 
-    const drawW = iw * scale;
-    const drawH = ih * scale;
+    const canvas = document.createElement("canvas");
+    canvas.width = SIZE;
+    canvas.height = SIZE;
 
-    const toCanvas = SIZE / (frameSize || 480);
-    const dx = (crop.dragPos?.x || 0) * toCanvas;
-    const dy = (crop.dragPos?.y || 0) * toCanvas;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas not supported");
 
-    const centerX = SIZE / 2 + dx;
-    const centerY = SIZE / 2 + dy;
-
-    const drawX = centerX - drawW / 2;
-    const drawY = centerY - drawH / 2;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
 
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, SIZE, SIZE);
 
-    ctx.drawImage(img, drawX, drawY, drawW, drawH);
+    const filterStyle = getFilterStyle(crop.filter);
+    ctx.filter = filterStyle === "none" ? "none" : filterStyle;
 
-    return canvas.toDataURL("image/jpeg", 0.92);
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, SIZE, SIZE);
+
+    ctx.filter = "none";
+
+    return canvas.toDataURL("image/jpeg", 0.94);
   };
 
+  // ---------------------------
+  // ✅ 인쇄용(예: 3000px) Blob 생성: 동일 역산 좌표 사용
+  // ---------------------------
+  const createPrintCroppedBlob = async (src: string, crop: CropState, outSize: number): Promise<Blob> => {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("Image load failed"));
+      i.src = src;
+    });
+
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
+
+    const FRAME = frameSize || 480;
+    const { sx, sy, sw, sh } = computeSourceCropRectFromEditor(iw, ih, FRAME, crop);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = outSize;
+    canvas.height = outSize;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas not supported");
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, outSize, outSize);
+
+    const filterStyle = getFilterStyle(crop.filter);
+    ctx.filter = filterStyle === "none" ? "none" : filterStyle;
+
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, outSize, outSize);
+
+    ctx.filter = "none";
+
+    const blob: Blob = await new Promise((resolve) =>
+      canvas.toBlob((b) => resolve(b as Blob), "image/jpeg", 0.92)
+    );
+
+    return blob;
+  };
+
+  // ---------------------------
+  // ✅ 저장
+  // ---------------------------
   const handleSaveCrop = () => {
     if (!hasPhoto || interactionsDisabled || currentSaveStatus === "saving" || !selectedUploadId) return;
 
@@ -591,32 +776,58 @@ export default function EditorPage() {
         const crop = cropsRef.current[savingId];
         if (!u?.src || !crop) throw new Error("Missing src/crop");
 
+        // ✅ 프리뷰(640)
         const previewDataUrl = await createCroppedPreviewDataUrl(u.src, crop);
 
-        setUploads((prev) =>
-          prev.map((item) =>
-            item.id === savingId ? { ...item, isCropped: true, previewUrl: previewDataUrl, status: "cropped" } : item
-          )
+        // ✅ 인쇄용(3600)
+        const PRINT_SIZE = 3600; // (300dpi=2362 / 400dpi=3149 가능)
+        const printBlob = await createPrintCroppedBlob(u.src, crop, PRINT_SIZE);
+        console.log("[PRINT]", PRINT_SIZE, "px blob bytes:", printBlob.size);
+
+        const FRAME = frameSize || 480;
+
+        // ✅ 핵심: 여기서 nextUploads를 직접 만들어 ref/state/저장을 모두 동일한 “최신 값”으로 맞춘다
+        const nextUploads: UploadItem[] = latestUploads.map((item) =>
+          item.id === savingId
+            ? {
+                ...item,
+                isCropped: true,
+                previewUrl: previewDataUrl,
+                status: "cropped",
+                printBlob,
+                printBytes: printBlob.size,
+                frameSizeUsed: FRAME,
+              }
+            : item
         );
 
-        setSaveStatuses((prev) => ({ ...prev, [savingId]: "saved" }));
+        // ✅ state 반영
+        setUploads(nextUploads);
+        uploadsRef.current = nextUploads; // ✅ 즉시 ref도 최신화
 
+        setSaveStatuses((prev) => ({ ...prev, [savingId]: "saved" }));
+        const nextStatuses: Record<string, SaveStatus> = { ...(saveStatusesRef.current || {}), [savingId]: "saved" };
+        saveStatusesRef.current = nextStatuses;
+
+        // ✅ sessionStorage에는 직렬화 가능한 “메타”만 저장 (File/Blob 포함 X)
         try {
-          const nextStatuses = { ...(saveStatusesRef.current || {}), [savingId]: "saved" as SaveStatus };
-          const orderItems = uploadsRef.current
+          const orderItemsMeta = nextUploads
             .filter((x) => !!x.src && nextStatuses[x.id] === "saved")
             .map((x) => ({
               id: x.id,
-              previewUrl: x.id === savingId ? previewDataUrl : x.previewUrl,
+              previewUrl: x.id === savingId ? previewDataUrl : x.previewUrl || x.src,
               src: x.src,
               fileName: x.fileName,
+              originalBytes: x.originalBytes,
+              originalType: x.originalType,
               zoom: cropsRef.current[x.id]?.zoom,
               dragPos: cropsRef.current[x.id]?.dragPos,
               filter: cropsRef.current[x.id]?.filter,
               qty: 1,
+              frameSizeUsed: x.id === savingId ? FRAME : x.frameSizeUsed ?? 480,
             }));
-          // ✅ AppContext가 읽는 키와 동일
-          sessionStorage.setItem(ORDER_ITEMS_KEY, JSON.stringify(orderItems));
+
+          sessionStorage.setItem(ORDER_ITEMS_KEY, JSON.stringify(orderItemsMeta));
         } catch {}
       } catch {
         setSaveStatuses((prev) => ({ ...prev, [savingId]: "error" }));
@@ -625,22 +836,20 @@ export default function EditorPage() {
     }, 80);
   };
 
-  // ✅ ADD: checkout으로 넘어가기 직전에 cart를 “AppContext + session + local(guest)” 3군데에 저장
-  const persistCartForCheckout = (orderItems: any[]) => {
+  // ✅ checkout으로 넘어가기 직전에 cart 저장
+  const persistCartForCheckout = (orderItemsFull: any[], orderItemsMeta: any[]) => {
     try {
-      sessionStorage.setItem(ORDER_ITEMS_KEY, JSON.stringify(orderItems));
+      sessionStorage.setItem(ORDER_ITEMS_KEY, JSON.stringify(orderItemsMeta));
     } catch {}
 
-    // AppContext cart set (persist는 AppContext가 알아서 함)
     if (typeof setCart === "function") {
-      setCart(orderItems);
+      setCart(orderItemsFull); // ✅ 여기만 File/Blob 포함 가능
     }
 
-    // ✅ extra safety: 게스트 키에 직접 저장 (배포/새탭/새로고침에서 cart empty 방지)
     try {
       const uid = app?.user?.uid as string | undefined;
       const key = cartStorageKey(uid);
-      localStorage.setItem(key, JSON.stringify(orderItems));
+      localStorage.setItem(key, JSON.stringify(orderItemsMeta));
     } catch {}
   };
 
@@ -680,21 +889,49 @@ export default function EditorPage() {
     setSafeTimeout(() => {
       window.clearTimeout(navTimer);
 
-      const orderItems = uploads
-        .filter((u) => !!u.src && saveStatuses[u.id] === "saved")
-        .map((u) => ({
-          id: u.id,
-          previewUrl: u.previewUrl,
-          src: u.src,
-          qty: 1,
-          zoom: crops[u.id]?.zoom,
-          dragPos: crops[u.id]?.dragPos,
-          filter: crops[u.id]?.filter,
-        }));
+      // ✅ 최신값은 ref 기준으로
+      const latestUploads = uploadsRef.current;
+      const latestStatuses = saveStatusesRef.current;
+      const latestCrops = cropsRef.current;
 
-      // ✅ ADD: 여기서 3중 저장(세션 + context + local)
-      persistCartForCheckout(orderItems);
+      const savedUploads = latestUploads.filter((u) => !!u.src && latestStatuses[u.id] === "saved");
 
+      const FRAME = frameSize || 480;
+
+      // ✅ (1) AppContext로 넘길 “FULL” 아이템: File + printBlob 포함 가능
+      const orderItemsFull = savedUploads.map((u) => ({
+        id: u.id,
+        previewUrl: u.previewUrl || u.src,
+        src: u.src,
+        file: u.file,
+        printBlob: u.printBlob,
+        printBytes: u.printBytes,
+        fileName: u.fileName,
+        originalBytes: u.originalBytes,
+        originalType: u.originalType,
+        qty: 1,
+        zoom: latestCrops[u.id]?.zoom,
+        dragPos: latestCrops[u.id]?.dragPos,
+        filter: latestCrops[u.id]?.filter,
+        frameSizeUsed: u.frameSizeUsed ?? FRAME,
+      }));
+
+      // ✅ (2) session/local에 저장할 “META” 아이템 (Blob/File 제외)
+      const orderItemsMeta = savedUploads.map((u) => ({
+        id: u.id,
+        previewUrl: u.previewUrl || u.src,
+        src: u.src,
+        fileName: u.fileName,
+        originalBytes: u.originalBytes,
+        originalType: u.originalType,
+        qty: 1,
+        zoom: latestCrops[u.id]?.zoom,
+        dragPos: latestCrops[u.id]?.dragPos,
+        filter: latestCrops[u.id]?.filter,
+        frameSizeUsed: u.frameSizeUsed ?? FRAME,
+      }));
+
+      persistCartForCheckout(orderItemsFull, orderItemsMeta);
       router.push("/checkout");
     }, 250);
   };
@@ -797,7 +1034,7 @@ export default function EditorPage() {
                 border: 1px solid var(--border); 
                 background: white; 
                 color: var(--text-secondary); 
-                cursor: pointer; 
+                cursor: pointer;
                 white-space: nowrap; 
                 transition: all 0.2s; 
               }
@@ -832,7 +1069,6 @@ export default function EditorPage() {
                 to { opacity: 1; transform: translateX(-50%) translateY(-12px); }
               }
 
-              /* ✅ Upload card: 효과 다시 강하게 + 가독성 업 */
               .upload-card { height: 100%; display: flex; align-items: center; justify-content: center; padding: 2rem; }
               .upload-inner {
                 width: 100%;
@@ -993,55 +1229,44 @@ export default function EditorPage() {
               ) : isLoadingImage ? (
                 <div className="skeleton" style={{ width: "100%", height: "100%" }} />
               ) : (
-                <>
-                  {/* ✅ Mixtiles 방식: "cover 스케일"을 직접 계산해 업로드 직후 흰여백/짤림 방지 */}
-                  <img
-                    key={selectedUpload?.src} // src 바뀌면 확실히 리셋
-                    src={selectedUpload?.src}
-                    alt={selectedUpload?.fileName || "Uploaded photo"}
-                    onLoad={(e) => {
-                      if (!selectedUploadId) return;
-                      const img = e.currentTarget;
-                      const w = img.naturalWidth || 0;
-                      const h = img.naturalHeight || 0;
-                      if (w > 0 && h > 0) {
-                        setImgMetaMap((prev) => {
-                          const next = { ...prev, [selectedUploadId]: { w, h } };
-                          return next;
-                        });
+                <img
+                  key={selectedUpload?.src}
+                  src={selectedUpload?.src}
+                  alt={selectedUpload?.fileName || "Uploaded photo"}
+                  onLoad={(e) => {
+                    if (!selectedUploadId) return;
+                    const img = e.currentTarget;
+                    const w = img.naturalWidth || 0;
+                    const h = img.naturalHeight || 0;
+                    if (w > 0 && h > 0) {
+                      setImgMetaMap((prev) => ({ ...prev, [selectedUploadId]: { w, h } }));
 
-                        // ✅ 메타 들어온 순간, 현재 drag/zoom 기준으로 clamp 한번 해서
-                        // 업로드 직후에도 빈영역/짤림 없게 안정화
-                        setCrops((prev) => {
-                          const base = prev[selectedUploadId] || { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" };
-                          const clamped = clampDrag(selectedUploadId, base.dragPos, base.zoom);
-                          return { ...prev, [selectedUploadId]: { ...base, dragPos: clamped } };
-                        });
-                      }
-                    }}
-                    style={{
-                      position: "absolute",
-                      left: "50%",
-                      top: "50%",
-
-                      // cover(프레임기준)로 만든 실제 px 사이즈
-                      width: `${coverPx.w}px`,
-                      height: `${coverPx.h}px`,
-
-                      transform: `translate(-50%, -50%) translate(${currentCrop.dragPos.x}px, ${currentCrop.dragPos.y}px) scale(${currentCrop.zoom})`,
-                      transformOrigin: "50% 50%",
-                      filter: getFilterStyle(currentCrop.filter),
-
-                      transition: isDragging ? "none" : "transform 0.12s ease-out",
-                      willChange: "transform",
-
-                      userSelect: "none",
-                      pointerEvents: "none",
-                      display: "block",
-                    }}
-                    draggable={false}
-                  />
-                </>
+                      // 메타 들어온 순간 clamp로 안정화
+                      setCrops((prev) => {
+                        const base =
+                          prev[selectedUploadId] || { zoom: 1.2, dragPos: { x: 0, y: 0 }, filter: "Original" };
+                        const clamped = clampDrag(selectedUploadId, base.dragPos, base.zoom);
+                        return { ...prev, [selectedUploadId]: { ...base, dragPos: clamped } };
+                      });
+                    }
+                  }}
+                  style={{
+                    position: "absolute",
+                    left: "50%",
+                    top: "50%",
+                    width: `${coverPx.w}px`,
+                    height: `${coverPx.h}px`,
+                    transform: `translate(-50%, -50%) translate(${currentCrop.dragPos.x}px, ${currentCrop.dragPos.y}px) scale(${currentCrop.zoom})`,
+                    transformOrigin: "50% 50%",
+                    filter: getFilterStyle(currentCrop.filter),
+                    transition: isDragging ? "none" : "transform 0.12s ease-out",
+                    willChange: "transform",
+                    userSelect: "none",
+                    pointerEvents: "none",
+                    display: "block",
+                  }}
+                  draggable={false}
+                />
               )}
             </div>
 
@@ -1133,6 +1358,36 @@ export default function EditorPage() {
                     tr("saveCrop", "Save crop")
                   )}
                 </button>
+
+                {/* ✅ DEV: 인쇄용 미리보기 열기 */}
+                {isDevAvailable && selectedUpload?.printBlob && (
+                  <div style={{ marginTop: 12 }}>
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{
+                        padding: "0.75rem 1.4rem",
+                        borderRadius: "999px",
+                        fontSize: "0.85rem",
+                        fontWeight: 800,
+                        background: "#F3F4F6",
+                        color: "#111827",
+                      }}
+                      onClick={() => {
+                        const blob = selectedUpload.printBlob!;
+                        const url = URL.createObjectURL(blob);
+                        window.open(url, "_blank");
+
+                        const img = new Image();
+                        img.onload = () => console.log("[PRINT PREVIEW] px:", img.naturalWidth, img.naturalHeight);
+                        img.src = url;
+                      }}
+                    >
+                      🔍 Open Print Preview (Dev)
+                      {selectedUpload.printBytes ? ` · ${(selectedUpload.printBytes / 1024).toFixed(0)}KB` : ""}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1158,6 +1413,7 @@ export default function EditorPage() {
 
                   <div
                     onClick={() => {
+                      // ✅ 기존 UX 유지: 첫 클릭은 선택, 두번째 클릭은 교체 업로드
                       if (selectedUploadId !== u.id) {
                         setSelectedUploadId(u.id);
                         return;
@@ -1322,7 +1578,15 @@ export default function EditorPage() {
               </div>
 
               {navTimerExceeded && (
-                <p style={{ marginTop: "10px", textAlign: "center", fontSize: "0.82rem", color: "var(--text-tertiary)", fontWeight: 700 }}>
+                <p
+                  style={{
+                    marginTop: "10px",
+                    textAlign: "center",
+                    fontSize: "0.82rem",
+                    color: "var(--text-tertiary)",
+                    fontWeight: 700,
+                  }}
+                >
                   {tr("loadingEditor", "Preparing checkout...")}
                 </p>
               )}

@@ -34,7 +34,9 @@ type OrderItem = {
 };
 
 type Order = {
-  id: string;
+  id: string;                 // localId or firestoreId (로컬은 localId)
+  displayId?: string;         // ✅ 추가 (ORD-YYYYMMDD-0001)
+  firestoreId?: string;       // ✅ 추가 (서버에서 만든 공식 docId)
   createdAt?: string | number | Date;
   status?: string;
   currency?: string; // "฿" or "THB"
@@ -54,11 +56,13 @@ function normalizeStatus(raw?: string): OrderStatus {
   return "unknown";
 }
 
-function formatDate(d?: Order["createdAt"]) {
+// ✅ locale 강제 (EN/TH)
+function formatDate(d?: Order["createdAt"], locale: "EN" | "TH" = "EN") {
   if (!d) return "";
   const date = d instanceof Date ? d : new Date(d);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString(undefined, {
+  const loc = locale === "TH" ? "th-TH" : "en-US";
+  return date.toLocaleDateString(loc, {
     year: "numeric",
     month: "short",
     day: "2-digit",
@@ -144,18 +148,34 @@ function statusMeta(status: OrderStatus) {
 export default function MyOrdersPage() {
   const router = useRouter();
   const app = useApp() as any;
-  const t = app?.t as ((key: string) => string) | undefined;
 
+  // ✅ t: 함수/객체 모두 지원
   const tr = (key: string, fallback: string) => {
-    const v = t?.(key);
-    if (!v || v === key) return fallback;
-    return v;
+    const maybeT = app?.t;
+    if (typeof maybeT === "function") {
+      const v = maybeT(key);
+      if (!v || v === key) return fallback;
+      return v;
+    }
+    if (maybeT && typeof maybeT === "object") {
+      const v = maybeT[key];
+      if (!v || v === key) return fallback;
+      return v;
+    }
+    return fallback;
   };
+
+  const locale = (app?.locale || "EN") as "EN" | "TH";
 
   // ✅ my-orders guard: authLoading이 "false로 확정"된 뒤에만 판단
   const nextPath = "/my-orders";
   const redirectingRef = useRef(false);
 
+  // ✅✅✅ 반드시 return 위에: useState / useEffect / useMemo 전부
+  const [ordersState, setOrdersState] = useState<Order[]>([]);
+  const [query, setQuery] = useState("");
+
+  // 1) 로그인 리다이렉트
   useEffect(() => {
     if (redirectingRef.current) return;
     if (app?.authLoading !== false) return;
@@ -165,6 +185,52 @@ export default function MyOrdersPage() {
       router.replace(`/login?next=${encodeURIComponent(nextPath)}`);
     }
   }, [app?.authLoading, app?.user, router]);
+
+  // 2) 주문 로드 (context 우선, 없으면 localStorage)
+  useEffect(() => {
+    if (app?.authLoading !== false) return;
+    if (!app?.user) return;
+    if (redirectingRef.current) return;
+
+    const contextOrders: Order[] = (app?.orders || app?.myOrders || []) as Order[];
+    if (Array.isArray(contextOrders) && contextOrders.length) {
+      setOrdersState(contextOrders);
+      return;
+    }
+
+    try {
+      const stored = getOrders(app.user.uid);
+      if (Array.isArray(stored)) setOrdersState(stored as Order[]);
+      else setOrdersState([]);
+    } catch {
+      setOrdersState([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app?.authLoading, app?.user]);
+
+  // ✅✅✅ useMemo도 return 위에서 항상 실행되게!
+  const orders: Order[] = ordersState;
+
+  const summary = useMemo(() => {
+    const total = orders.length;
+    const active = orders.filter((o) => {
+      const s = normalizeStatus(o.status);
+      return s !== "delivered" && s !== "cancelled";
+    }).length;
+    const delivered = orders.filter((o) => normalizeStatus(o.status) === "delivered").length;
+    return { total, active, delivered };
+  }, [orders]);
+
+  // ✅✅✅ 검색: displayId도 포함
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return orders;
+    return orders.filter((o) => {
+      const a = (o.displayId || "").toLowerCase();
+      const b = (o.id || "").toLowerCase();
+      return a.includes(q) || b.includes(q);
+    });
+  }, [orders, query]);
 
   // ✅ 로그인 확인 중이거나 리다이렉트 중이면 화면 노출 최소화
   if (app?.authLoading !== false || redirectingRef.current || !app?.user) {
@@ -188,52 +254,6 @@ export default function MyOrdersPage() {
       </AppLayout>
     );
   }
-
-  // ✅ myorders는 context + localStorage 둘 다 지원
-  const [ordersState, setOrdersState] = useState<Order[]>([]);
-  const [query, setQuery] = useState("");
-
-  useEffect(() => {
-    if (!app?.user) return;
-
-    // 1) context에 있으면 우선 사용
-    const contextOrders: Order[] = (app?.orders || app?.myOrders || []) as Order[];
-    if (Array.isArray(contextOrders) && contextOrders.length) {
-      setOrdersState(contextOrders);
-      return;
-    }
-
-    // 2) 없으면 localStorage(getOrders)에서 직접 읽기
-    try {
-      const stored = getOrders(app.user.uid);
-      if (Array.isArray(stored)) {
-        setOrdersState(stored as Order[]);
-      } else {
-        setOrdersState([]);
-      }
-    } catch {
-      setOrdersState([]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [app?.user]);
-
-  const orders: Order[] = ordersState;
-
-  const summary = useMemo(() => {
-    const total = orders.length;
-    const active = orders.filter((o) => {
-      const s = normalizeStatus(o.status);
-      return s !== "delivered" && s !== "cancelled";
-    }).length;
-    const delivered = orders.filter((o) => normalizeStatus(o.status) === "delivered").length;
-    return { total, active, delivered };
-  }, [orders]);
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return orders;
-    return orders.filter((o) => (o.id || "").toLowerCase().includes(q));
-  }, [orders, query]);
 
   const goHome = () => router.push("/");
   const goEditor = () => router.push("/editor");
@@ -371,8 +391,13 @@ export default function MyOrdersPage() {
                     <OrderRow
                       key={o.id}
                       order={o}
-                      // ✅ 라우트 통일: /myorder/[id]
-                      onOpen={() => router.push(`/myorder/${encodeURIComponent(o.id)}`)}
+                      // ✅ 공식 Firestore id가 있으면 그걸로 상세 페이지 이동 (권장)
+                      onOpen={() => {
+                        const targetId = o.firestoreId || o.id;
+                        router.push(`/myorder/${encodeURIComponent(targetId)}`);
+                      }}
+                      locale={locale}
+                      tr={tr}
                     />
                   ))}
               </div>
@@ -394,16 +419,17 @@ function SummaryCard({ label, value, helper }: { label: string; value: number; h
   );
 }
 
-function OrderRow({ order, onOpen }: { order: any; onOpen: () => void }) {
-  const app = useApp() as any;
-  const t = app?.t as ((key: string) => string) | undefined;
-
-  const tr = (key: string, fallback: string) => {
-    const v = t?.(key);
-    if (!v || v === key) return fallback;
-    return v;
-  };
-
+function OrderRow({
+  order,
+  onOpen,
+  locale,
+  tr,
+}: {
+  order: any;
+  onOpen: () => void;
+  locale: "EN" | "TH";
+  tr: (key: string, fallback: string) => string;
+}) {
   const s = normalizeStatus(order.status);
   const meta = statusMeta(s);
   const Icon = meta.icon;
@@ -427,7 +453,6 @@ function OrderRow({ order, onOpen }: { order: any; onOpen: () => void }) {
     }
   })();
 
-  // ✅ editor 크롭 미리보기 지원: previewUrl 우선, 없으면 src
   const previews: string[] = Array.isArray(order.items)
     ? order.items
         .map((it: any) => it.previewUrl || it.src)
@@ -471,7 +496,11 @@ function OrderRow({ order, onOpen }: { order: any; onOpen: () => void }) {
 
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
-            <div style={{ fontWeight: 950, fontSize: 15 }}>{order.id}</div>
+            {/* ✅ 표시: displayId 우선 */}
+            <div style={{ fontWeight: 950, fontSize: 15 }}>
+              {order.displayId || order.id}
+            </div>
+
             <span
               style={{
                 fontSize: 12,
@@ -488,7 +517,7 @@ function OrderRow({ order, onOpen }: { order: any; onOpen: () => void }) {
           </div>
 
           <div style={{ fontSize: 13, color: "var(--text-tertiary)", fontWeight: 600, marginTop: 4 }}>
-            {formatDate(order.createdAt)}
+            {formatDate(order.createdAt, locale)}
             {itemsCount ? ` · ${itemsCount} ${tr("tilesUnit", "tiles")}` : ""}
             {order.total != null ? ` · ${formatMoney(order.total, order.currency)}` : ""}
           </div>

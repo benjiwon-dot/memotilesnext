@@ -3,7 +3,6 @@
 
 import React from "react";
 import { useApp } from "@/context/AppContext";
-import MarketingLayout from "@/components/MarketingLayout";
 
 type Lang = "TH" | "EN";
 
@@ -161,7 +160,7 @@ const TOS_CONTENT: Record<
       {
         title: "14. ข้อมูลการติดต่อ",
         content:
-          "หากคุณมีคำถามใดๆ โปรดติดต่อทีมงานฝ่ายสนับสนุนของเราได้ที่ support@memotiles.com",
+          "หากคุณมีคำถามใดๆ โปรดติดต่อทีมงานฝ่ายสนับสนุนของเราได้ที่ support@memotiles.com.",
       },
     ],
   },
@@ -169,31 +168,29 @@ const TOS_CONTENT: Record<
 
 export default function TermsClient() {
   const { language } = useApp();
-  const lang = (language === "EN" ? "EN" : "TH") as Lang;
+  const lang: Lang = language === "EN" ? "EN" : "TH";
   const content = TOS_CONTENT[lang];
 
   return (
-    <MarketingLayout>
-      <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 64px)" }}>
-        <div className="container" style={{ padding: "6rem 1rem", maxWidth: "800px" }}>
-          <h1 style={{ fontSize: "2.5rem", fontWeight: 800, marginBottom: "3rem", textAlign: "center" }}>
-            {content.title}
-          </h1>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 64px)" }}>
+      <div className="container" style={{ padding: "6rem 1rem", maxWidth: "800px" }}>
+        <h1 style={{ fontSize: "2.5rem", fontWeight: 800, marginBottom: "3rem", textAlign: "center" }}>
+          {content.title}
+        </h1>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "2.5rem" }}>
-            {content.sections.map((section, idx) => (
-              <div key={idx} style={{ borderBottom: "1px solid var(--border)", paddingBottom: "2.5rem" }}>
-                <h2 style={{ fontSize: "1.25rem", fontWeight: 700, marginBottom: "1rem", color: "var(--text-primary)" }}>
-                  {section.title}
-                </h2>
-                <p style={{ fontSize: "1rem", lineHeight: "1.8", color: "var(--text-secondary)", whiteSpace: "pre-wrap" }}>
-                  {section.content}
-                </p>
-              </div>
-            ))}
-          </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "2.5rem" }}>
+          {content.sections.map((section, idx) => (
+            <div key={idx} style={{ borderBottom: "1px solid var(--border)", paddingBottom: "2.5rem" }}>
+              <h2 style={{ fontSize: "1.25rem", fontWeight: 700, marginBottom: "1rem", color: "var(--text-primary)" }}>
+                {section.title}
+              </h2>
+              <p style={{ fontSize: "1rem", lineHeight: "1.8", color: "var(--text-secondary)", whiteSpace: "pre-wrap" }}>
+                {section.content}
+              </p>
+            </div>
+          ))}
         </div>
       </div>
-    </MarketingLayout>
+    </div>
   );
 }
